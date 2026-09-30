@@ -84,44 +84,7 @@ namespace Snake3D
         }
 
 
-        //private void SnakeView_PreviewKeyDown(object sender, KeyEventArgs e)
-        //{
-        //    if (_game == null) return;
-
-        //    switch (e.Key)
-        //    {
-        //        case Key.Space:
-        //            if (_game.IsGameOver || !_game.IsRunning)
-        //            {
-        //                _game.Start();
-        //                StatusText.Text = "Идёт игра!";
-        //            }
-        //            break;
-        //        case Key.Up:
-        //        case Key.W:
-        //            _game.SetDirection(0, 1, 0);
-        //            break;
-        //        case Key.Down:
-        //        case Key.S:
-        //            _game.SetDirection(0, -1, 0);
-        //            break;
-        //        case Key.Left:
-        //        case Key.A:
-        //            _game.SetDirection(-1, 0, 0);
-        //            break;
-        //        case Key.Right:
-        //        case Key.D:
-        //            _game.SetDirection(1, 0, 0);
-        //            break;
-        //        case Key.Q:
-        //            _game.SetDirection(0, 0, -1);
-        //            break;
-        //        case Key.E:
-        //            _game.SetDirection(0, 0, 1);
-        //            break;
-        //    }
-        //}
-
+       
         private void SnakeView_PreviewKeyDown(object sender, KeyEventArgs e)
         {
             if (_game == null) return;

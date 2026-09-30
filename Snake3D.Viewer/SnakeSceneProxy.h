@@ -12,6 +12,7 @@
 #include <AIS_Shape.hxx>
 #include <TopoDS_Shape.hxx>
 #include <BRepBuilderAPI_MakeEdge.hxx>
+#include <BRepBuilderAPI_MakeFace.hxx>
 #include <BRepPrimAPI_MakeBox.hxx>
 #include <BRepPrimAPI_MakeCylinder.hxx>
 #include <BRepPrimAPI_MakeSphere.hxx>
@@ -189,23 +190,6 @@ namespace Snake3DViewer
                 _aisContext()->UpdateCurrentViewer();
         }
 
-        //void AddSegment(double x, double y, double z, double radius, int index)
-        //{
-        //    gp_Pnt center(x, y, z);
-        //    BRepPrimAPI_MakeSphere sphere(center, radius);
-        //    /*gp_Dir axis(0, 0, 1);
-        //    TopoDS_Shape capsule = CreateCapsule(center, axis, radius * 2, radius);
-        //    Handle(AIS_Shape) aisShape = new AIS_Shape(capsule);*/
-        //    Handle(AIS_Shape) aisShape = new AIS_Shape(sphere.Shape());
-        //    aisShape->SetDisplayMode(1);
-        //    Quantity_Color color = (index == 0)
-        //        ? Quantity_Color(Quantity_NOC_RED)
-        //        : Quantity_Color(Quantity_NOC_BLUE);
-        //    aisShape->SetColor(color);
-        //    _snakeSegments->push_back(aisShape);
-        //    _aisContext()->Display(aisShape, Standard_True);
-        //}
-
         void AddSegment(double x, double y, double z, double radius, int index)
         {
             gp_Pnt center(x, y, z);
@@ -318,6 +302,41 @@ namespace Snake3DViewer
             AddWall(w4);
         }
 
+        void CreateArenaWalls(double size)
+        {
+            double half = size / 2.0;
+            double step = size / 10.0;
+
+            // --- Стена 1: Задняя (Z = -half) ---
+            for (double s = -half; s <= half + 0.001; s += step)
+            {
+                AddArenaLine(gp_Pnt(s, -half, -half), gp_Pnt(s, half, -half));
+                AddArenaLine(gp_Pnt(-half, s, -half), gp_Pnt(half, s, -half));
+            }
+
+            // --- Стена 2: Левая (X = -half) ---
+            for (double s = -half; s <= half + 0.001; s += step)
+            {
+                AddArenaLine(gp_Pnt(-half, s, -half), gp_Pnt(-half, s, half));
+                AddArenaLine(gp_Pnt(-half, -half, s), gp_Pnt(-half, half, s));
+            }
+
+            // --- Стена 3: Правая (X = +half) ---
+            for (double s = -half; s <= half + 0.001; s += step)
+            {
+                AddArenaLine(gp_Pnt(half, s, -half), gp_Pnt(half, s, half));
+                AddArenaLine(gp_Pnt(half, -half, s), gp_Pnt(half, half, s));
+            }
+        }
+
+        void AddArenaLine(const gp_Pnt& p1, const gp_Pnt& p2)
+        {
+            BRepBuilderAPI_MakeEdge edge(p1, p2);
+            Handle(AIS_Shape) aisEdge = new AIS_Shape(edge.Shape());
+            aisEdge->SetDisplayMode(0);
+            aisEdge->SetColor(Quantity_Color(0.4, 0.4, 0.4, Quantity_TOC_RGB));
+            _aisContext()->Display(aisEdge, Standard_True);
+        }
 
         void AddFood(double x, double y, double z, double radius)
         {
@@ -362,49 +381,34 @@ namespace Snake3DViewer
 
             double half = arenaSize / 2.0;
 
-            // Линии вдоль оси X (параллельны оси X, идут по Y)
-            for (double y = -half; y <= half + 0.001; y += step)
+            // --- Стена 1: Задняя (Z = -half) ---
+            for (double s = -half; s <= half + 0.001; s += step)
             {
-                gp_Pnt p1(-half, y, 0);
-                gp_Pnt p2(half, y, 0);
-                AddGridLine(p1, p2, Quantity_NOC_WHITE); // Цвет не используется, берем любой
+                AddArenaLine(gp_Pnt(s, -half, -half), gp_Pnt(s, half, -half));
+                AddArenaLine(gp_Pnt(-half, s, -half), gp_Pnt(half, s, -half));
             }
 
-            // Линии вдоль оси Y (параллельны оси Y, идут по X)
-            for (double x = -half; x <= half + 0.001; x += step)
+            // --- Стена 2: Левая (X = -half) ---
+            for (double s = -half; s <= half + 0.001; s += step)
             {
-                gp_Pnt p1(x, -half, 0);
-                gp_Pnt p2(x, half, 0);
-                AddGridLine(p1, p2, Quantity_NOC_WHITE);
+                AddArenaLine(gp_Pnt(-half, s, -half), gp_Pnt(-half, s, half));
+                AddArenaLine(gp_Pnt(-half, -half, s), gp_Pnt(-half, half, s));
             }
 
-            // Оси координат (Красный - X, Зеленый - Y, Синий - Z)
-            gp_Pnt origin(0, 0, 0);
-            gp_Pnt xAxis(arenaSize * 0.5, 0, 0);
-            gp_Pnt yAxis(0, arenaSize * 0.5, 0);
-            gp_Pnt zAxis(0, 0, arenaSize * 0.5);
+            // --- Стена 3: Правая (X = +half) ---
+            for (double s = -half; s <= half + 0.001; s += step)
+            {
+                AddArenaLine(gp_Pnt(half, s, -half), gp_Pnt(half, s, half));
+                AddArenaLine(gp_Pnt(half, -half, s), gp_Pnt(half, half, s));
+            }
 
-            // Helper для осей с конкретным цветом
+            // --- Стена 4: Пол (Y = -half) ---
+            for (double s = -half; s <= half + 0.001; s += step)
             {
-                BRepBuilderAPI_MakeEdge edgeX(origin, xAxis);
-                Handle(AIS_Shape) aisX = new AIS_Shape(edgeX.Shape());
-                aisX->SetDisplayMode(0); aisX->SetColor(Quantity_Color(Quantity_NOC_RED));
-                _aisContext()->Display(aisX, Standard_True);
-            }
-            {
-                BRepBuilderAPI_MakeEdge edgeY(origin, yAxis);
-                Handle(AIS_Shape) aisY = new AIS_Shape(edgeY.Shape());
-                aisY->SetDisplayMode(0); aisY->SetColor(Quantity_Color(Quantity_NOC_GREEN));
-                _aisContext()->Display(aisY, Standard_True);
-            }
-            {
-                BRepBuilderAPI_MakeEdge edgeZ(origin, zAxis);
-                Handle(AIS_Shape) aisZ = new AIS_Shape(edgeZ.Shape());
-                aisZ->SetDisplayMode(0); aisZ->SetColor(Quantity_Color(Quantity_NOC_BLUE));
-                _aisContext()->Display(aisZ, Standard_True);
+                AddArenaLine(gp_Pnt(s, -half, -half), gp_Pnt(s, -half, half));
+                AddArenaLine(gp_Pnt(-half, -half, s), gp_Pnt(half, -half, s));
             }
         }
-
 
         bool CheckCollision(const TopoDS_Shape& s1, const TopoDS_Shape& s2)
         {
@@ -537,9 +541,9 @@ namespace Snake3DViewer
             double cz = (minZ + maxZ) * 0.5;
 
             // 2. Камера: позади по forward, выше по up, смотрит вперёд
-            double camBack = 8.0;
-            double camUp = 3.0;
-            double lookAhead = 12.0;
+            double camBack = 4.0;
+            double camUp = 2.0;
+            double lookAhead = 6.0;
 
             // Eye = голова - forward*camBack + up*camUp
             double desiredEyeX = cx - _dirX * camBack + _upX * camUp;
@@ -557,7 +561,7 @@ namespace Snake3DViewer
             gp_Pnt currentAt = cam->Center();
 
             // 4. Lerp — запаздывание камеры
-            double speed = 0.15;
+            double speed = 0.1;
 
             double newEyeX = currentEye.X() + (desiredEyeX - currentEye.X()) * speed;
             double newEyeY = currentEye.Y() + (desiredEyeY - currentEye.Y()) * speed;
