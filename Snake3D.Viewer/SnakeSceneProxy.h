@@ -24,6 +24,7 @@
 #include <gp_Pnt.hxx>
 #include <gp_XYZ.hxx>
 #include <vector>
+#include <cmath>
 #include <vcclr.h>
 #include <msclr/marshal.h>
 #include <Graphic3d_Camera.hxx>
@@ -80,6 +81,9 @@ namespace Snake3DViewer
         std::vector<Handle(AIS_Shape)>* _snakeSegments;
         std::vector<Handle(AIS_Shape)>* _walls;
 
+        double _dirX, _dirY, _dirZ;
+        double _upX, _upY, _upZ;
+
     public:
         SnakeSceneProxy()
         {
@@ -90,6 +94,9 @@ namespace Snake3DViewer
             _foodShape() = NULL;
             _snakeSegments = new std::vector<Handle(AIS_Shape)>();
             _walls = new std::vector<Handle(AIS_Shape)>();
+
+            _dirX = 0.0;  _dirY = 1.0;  _dirZ = 0.0;
+            _upX = 0.0;   _upY = 0.0;   _upZ = 1.0;
         }
 
         ~SnakeSceneProxy()
@@ -182,19 +189,70 @@ namespace Snake3DViewer
                 _aisContext()->UpdateCurrentViewer();
         }
 
+        //void AddSegment(double x, double y, double z, double radius, int index)
+        //{
+        //    gp_Pnt center(x, y, z);
+        //    BRepPrimAPI_MakeSphere sphere(center, radius);
+        //    /*gp_Dir axis(0, 0, 1);
+        //    TopoDS_Shape capsule = CreateCapsule(center, axis, radius * 2, radius);
+        //    Handle(AIS_Shape) aisShape = new AIS_Shape(capsule);*/
+        //    Handle(AIS_Shape) aisShape = new AIS_Shape(sphere.Shape());
+        //    aisShape->SetDisplayMode(1);
+        //    Quantity_Color color = (index == 0)
+        //        ? Quantity_Color(Quantity_NOC_RED)
+        //        : Quantity_Color(Quantity_NOC_BLUE);
+        //    aisShape->SetColor(color);
+        //    _snakeSegments->push_back(aisShape);
+        //    _aisContext()->Display(aisShape, Standard_True);
+        //}
+
         void AddSegment(double x, double y, double z, double radius, int index)
         {
             gp_Pnt center(x, y, z);
-            BRepPrimAPI_MakeSphere sphere(center, radius);
-            /*gp_Dir axis(0, 0, 1);
-            TopoDS_Shape capsule = CreateCapsule(center, axis, radius * 2, radius);
-            Handle(AIS_Shape) aisShape = new AIS_Shape(capsule);*/
-            Handle(AIS_Shape) aisShape = new AIS_Shape(sphere.Shape());
+            Handle(AIS_Shape) aisShape;
+
+            if (index == 0)
+            {
+                // Голова — серебристая капсула (космолет)
+                gp_Ax2 ax2(center, gp_Dir(0, 1, 0));
+                TopoDS_Shape cylinder = BRepPrimAPI_MakeCylinder(ax2, radius, radius * 2).Shape();
+                TopoDS_Shape sphere1 = BRepPrimAPI_MakeSphere(gp_Pnt(center.X(), center.Y() + radius, center.Z()), radius).Shape();
+                TopoDS_Shape sphere2 = BRepPrimAPI_MakeSphere(gp_Pnt(center.X(), center.Y() - radius, center.Z()), radius).Shape();
+
+                // OCCT 7.9: Fuse — попарно, без Add()
+                BRepAlgoAPI_Fuse fuse1(cylinder, sphere1);
+                fuse1.Build();
+                if (!fuse1.IsDone())
+                {
+                    BRepPrimAPI_MakeSphere fallback(center, radius);
+                    aisShape = new AIS_Shape(fallback.Shape());
+                    aisShape->SetColor(Quantity_Color(Quantity_NOC_RED));
+                }
+                else
+                {
+                    BRepAlgoAPI_Fuse fuse2(fuse1.Shape(), sphere2);
+                    fuse2.Build();
+                    if (fuse2.IsDone())
+                    {
+                        aisShape = new AIS_Shape(fuse2.Shape());
+                    }
+                    else
+                    {
+                        aisShape = new AIS_Shape(fuse1.Shape());
+                    }
+                    // Серебристый цвет через RGB (0.75, 0.75, 0.75)
+                    aisShape->SetColor(Quantity_Color(0.75, 0.75, 0.75, Quantity_TOC_RGB));
+                }
+            }
+            else
+            {
+                // Тело — синие сферы
+                BRepPrimAPI_MakeSphere sphere(center, radius);
+                aisShape = new AIS_Shape(sphere.Shape());
+                aisShape->SetColor(Quantity_Color(Quantity_NOC_BLUE));
+            }
+
             aisShape->SetDisplayMode(1);
-            Quantity_Color color = (index == 0)
-                ? Quantity_Color(Quantity_NOC_RED)
-                : Quantity_Color(Quantity_NOC_BLUE);
-            aisShape->SetColor(color);
             _snakeSegments->push_back(aisShape);
             _aisContext()->Display(aisShape, Standard_True);
         }
@@ -269,6 +327,19 @@ namespace Snake3DViewer
             _foodShape()->SetDisplayMode(1);
             _foodShape()->SetColor(Quantity_Color(Quantity_NOC_YELLOW));
             _aisContext()->Display(_foodShape(), Standard_True);            
+        }
+
+        void AddCrystal(double x, double y, double z, double radius)
+        {
+            gp_Pnt center(x, y, z);
+            BRepPrimAPI_MakeSphere sphere(center, radius);
+
+            Handle(AIS_Shape) aisShape = new AIS_Shape(sphere.Shape());
+            aisShape->SetDisplayMode(1);
+            aisShape->SetColor(Quantity_Color(Quantity_NOC_CYAN));
+
+            _aisContext()->Display(aisShape, Standard_True);
+            _foodShape() = aisShape;
         }
 
         void AddGridLine(const gp_Pnt& p1, const gp_Pnt& p2, Quantity_NameOfColor baseColor)
@@ -437,6 +508,15 @@ namespace Snake3DViewer
                 _aisContext()->UpdateCurrentViewer();
         }
 
+        void SetOrientation(double fx, double fy, double fz,
+            double ux, double uy, double uz)
+        {
+            double dlen = sqrt(fx * fx + fy * fy + fz * fz);
+            if (dlen > 0.0) { _dirX = fx / dlen; _dirY = fy / dlen; _dirZ = fz / dlen; }
+            double ulen = sqrt(ux * ux + uy * uy + uz * uz);
+            if (ulen > 0.0) { _upX = ux / ulen; _upY = uy / ulen; _upZ = uz / ulen; }
+        }
+
         void FollowHead(int headIndex)
         {
             if (headIndex < 0 || _snakeSegments == nullptr) return;
@@ -446,10 +526,9 @@ namespace Snake3DViewer
             Handle(AIS_Shape) headShape = (*_snakeSegments)[headIndex];
             if (headShape.IsNull()) return;
 
-            // 1. Центр головы через Bnd_Box
+            // 1. Центр головы
             Bnd_Box box;
             BRepBndLib::Add(headShape->Shape(), box);
-
             Standard_Real minX, minY, minZ, maxX, maxY, maxZ;
             box.Get(minX, minY, minZ, maxX, maxY, maxZ);
 
@@ -457,52 +536,41 @@ namespace Snake3DViewer
             double cy = (minY + maxY) * 0.5;
             double cz = (minZ + maxZ) * 0.5;
 
-            // 2. Направление камеры (назад и вверх): (0, -1, 1)
-            double dirX = 0.0;
-            double dirY = -1.0;
-            double dirZ = 1.0;
-            double len = sqrt(dirX * dirX + dirY * dirY + dirZ * dirZ);
-            if (len > 0.0) { dirX /= len; dirY /= len; dirZ /= len; }
+            // 2. Камера: позади по forward, выше по up, смотрит вперёд
+            double camBack = 8.0;
+            double camUp = 3.0;
+            double lookAhead = 12.0;
 
-            double offsetDist = 14.0;
+            // Eye = голова - forward*camBack + up*camUp
+            double desiredEyeX = cx - _dirX * camBack + _upX * camUp;
+            double desiredEyeY = cy - _dirY * camBack + _upY * camUp;
+            double desiredEyeZ = cz - _dirZ * camBack + _upZ * camUp;
 
-            // 3. Желаемые позиции камеры
-            double desiredEyeX = cx - dirX * offsetDist;
-            double desiredEyeY = cy - dirY * offsetDist;
-            double desiredEyeZ = cz - dirZ * offsetDist;
+            // At = голова + forward*lookAhead
+            double desiredAtX = cx + _dirX * lookAhead;
+            double desiredAtY = cy + _dirY * lookAhead;
+            double desiredAtZ = cz + _dirZ * lookAhead;
 
-            double desiredAtX = cx;
-            double desiredAtY = cy;
-            double desiredAtZ = cz;
-
-            // 4. Текущие позиции камеры через Graphic3d_Camera
+            // 3. Текущие позиции
             Handle(Graphic3d_Camera) cam = _view()->Camera();
-
             gp_Pnt currentEye = cam->Eye();
-            gp_Pnt currentAt = cam->Center(); // В Graphic3d_Camera метод называется Center, а не At
+            gp_Pnt currentAt = cam->Center();
 
-            double curEyeX = currentEye.X();
-            double curEyeY = currentEye.Y();
-            double curEyeZ = currentEye.Z();
+            // 4. Lerp — запаздывание камеры
+            double speed = 0.15;
 
-            double curAtX = currentAt.X();
-            double curAtY = currentAt.Y();
-            double curAtZ = currentAt.Z();
+            double newEyeX = currentEye.X() + (desiredEyeX - currentEye.X()) * speed;
+            double newEyeY = currentEye.Y() + (desiredEyeY - currentEye.Y()) * speed;
+            double newEyeZ = currentEye.Z() + (desiredEyeZ - currentEye.Z()) * speed;
 
-            // 5. Lerp (интерполяция)
-            double speed = 0.18;
+            double newAtX = currentAt.X() + (desiredAtX - currentAt.X()) * speed;
+            double newAtY = currentAt.Y() + (desiredAtY - currentAt.Y()) * speed;
+            double newAtZ = currentAt.Z() + (desiredAtZ - currentAt.Z()) * speed;
 
-            double newEyeX = curEyeX + (desiredEyeX - curEyeX) * speed;
-            double newEyeY = curEyeY + (desiredEyeY - curEyeY) * speed;
-            double newEyeZ = curEyeZ + (desiredEyeZ - curEyeZ) * speed;
-
-            double newAtX = curAtX + (desiredAtX - curAtX) * speed;
-            double newAtY = curAtY + (desiredAtY - curAtY) * speed;
-            double newAtZ = curAtZ + (desiredAtZ - curAtZ) * speed;
-
-            // 6. Применение новых позиций через Graphic3d_Camera
+            // 5. Применение: позиция + вектор up (камера вращается с кораблём)
             cam->SetEye(gp_Pnt(newEyeX, newEyeY, newEyeZ));
-            cam->SetCenter(gp_Pnt(newAtX, newAtY, newAtZ)); // SetCenter вместо SetAt
+            cam->SetCenter(gp_Pnt(newAtX, newAtY, newAtZ));
+            cam->SetUp(gp_Dir(_upX, _upY, _upZ));
 
             _view()->Redraw();
         }

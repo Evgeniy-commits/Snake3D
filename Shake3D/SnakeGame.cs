@@ -21,22 +21,52 @@ namespace Snake3D
     {
         public double X, Y, Z;
         public Vector3D(double x, double y, double z) { X = x; Y = y; Z = z; }
-        public static Vector3D operator * (Vector3D v, double s)
+
+        public static Vector3D operator *(Vector3D v, double s)
             => new Vector3D(v.X * s, v.Y * s, v.Z * s);
+        public static Vector3D operator *(double s, Vector3D v)
+            => new Vector3D(v.X * s, v.Y * s, v.Z * s);
+        public static Vector3D operator +(Vector3D a, Vector3D b)
+            => new Vector3D(a.X + b.X, a.Y + b.Y, a.Z + b.Z);
+        public static Vector3D operator -(Vector3D a, Vector3D b)
+            => new Vector3D(a.X - b.X, a.Y - b.Y, a.Z - b.Z);
+
         public static double DotProduct(Vector3D a, Vector3D b)
             => a.X * b.X + a.Y * b.Y + a.Z * b.Z;
+
+        public static Vector3D CrossProduct(Vector3D a, Vector3D b)
+            => new Vector3D(
+                a.Y * b.Z - a.Z * b.Y,
+                a.Z * b.X - a.X * b.Z,
+                a.X * b.Y - a.Y * b.X);
+
+        public double Length => Math.Sqrt(X * X + Y * Y + Z * Z);
+
+        public Vector3D Normalized()
+        {
+            double len = Length;
+            if (len < 1e-10) return new Vector3D(0, 0, 0);
+            return new Vector3D(X / len, Y / len, Z / len);
+        }
     }
 
     public class SnakeGame
     {
         private readonly SnakeSceneProxy _proxy;
         private List<Point3D> _segments;
-        private Point3D _food;
-        private Vector3D _direction;
+        //private Point3D _food;
+
+        private Point3D _crystalPos;
+
+        private Vector3D _forward;   // куда летим
+        private Vector3D _up;        // где верх
+
+        private int _pendingTurn = 0;  // 0=нет, 1=лево, 2=право, 3=вверх, 4=вниз
+
         private double _segmentRadius = 0.4;
         private double _step = 1.0;
         private double _foodRadius = 0.3;
-        private double _arenaSize = 10.0;
+        private double _arenaSize = 50.0;
         private Random _random = new Random();
 
         public int Score        { get; private set; }
@@ -52,19 +82,7 @@ namespace Snake3D
             _arenaSize = arenaSize;
             _segmentRadius = segmentRadius;
             _foodRadius = foodRadius;
-            _segments = new List<Point3D>();
-
-            //// Инициализация головы (обязательно!)
-            //_segments.Add(new Point3D(0, 0, 0));
-
-            _direction = new Vector3D(0, 0, 1);
-            _step = 1.0;
-            Score = 0;
-            IsRunning = true;
-            IsGameOver = false;
-
-            //// Первоначальное создание сегмента в OCCT
-            //_proxy.AddSegment(0, 0, 0, segmentRadius, 0);
+            _segments = new List<Point3D>();          
         }
 
         public void Start()
@@ -81,35 +99,50 @@ namespace Snake3D
 
             for (int i = 0; i < 3; i++)
             {
-                Point3D p = new Point3D(-i * _step, 0, 0);
+                Point3D p = new Point3D(0, -i * _step, 0);
                 _segments.Add(p);
                 _proxy.AddSegment(p.X, p.Y, p.Z, _segmentRadius, i);
             }
 
-            SpawnFood();
+            // было _direction = new Vector3D(0,0,1)
+            _forward = new Vector3D(0, 1, 0);   // летим вперёд по Y
+            _up = new Vector3D(0, 0, 1);   // Z — верх
+            _pendingTurn = 0;                  
+            SpawnCrystal();
             Score = 0;
             ScoreChanged?.Invoke(this, Score);
-
-            // Первичная подгонка камеры под змею (один раз при ресете)
             _proxy.Redraw();
         }
 
-        public void SetDirection(double dx, double dy, double dz)
-        {
-            Vector3D newDir = new Vector3D(dx, dy, dz);
-            if (Vector3D.DotProduct(newDir, _direction) < 0) return;
-            _direction = newDir;
-        }
-
+        public void TurnLeft() { _pendingTurn = 1; }
+        public void TurnRight() { _pendingTurn = 2; }
+        public void TurnUp() { _pendingTurn = 3; }
+        public void TurnDown() { _pendingTurn = 4; }
+       
         public void Update()
         {
             if (!IsRunning || IsGameOver) return;
             if (_segments.Count == 0) { TriggerGameOver(); return; }
 
-            // 1. Новая голова
-            Point3D newHead = _segments[0] + _direction * _step;
+            // применяем один поворот на 90°, если был запрос
+            switch (_pendingTurn)
+            {
+                case 1: RotateYaw(1); break;  // лево
+                case 2: RotateYaw(-1); break;  // право
+                case 3: RotatePitch(1); break;  // вверх
+                case 4: RotatePitch(-1); break;  // вниз
+            }
+            _pendingTurn = 0;
 
-            // 2. Границы
+            // передаём ориентацию в C++ для камеры
+            _proxy.SetOrientation(
+                _forward.X, _forward.Y, _forward.Z,
+                _up.X, _up.Y, _up.Z);
+
+            //было _direction, теперь _forward
+            Point3D newHead = _segments[0] + _forward * _step;
+
+            //границы куба по всем осям
             if (Math.Abs(newHead.X) > _arenaSize ||
                 Math.Abs(newHead.Y) > _arenaSize ||
                 Math.Abs(newHead.Z) > _arenaSize)
@@ -118,21 +151,30 @@ namespace Snake3D
                 return;
             }
 
-            // 3. Еда
-            bool ateFood = false;
-            double distToFood = Distance(newHead, _food);
-            if (distToFood < _segmentRadius + _foodRadius)
+            //еда
+            double distToCrystal = Distance(newHead, _crystalPos);
+
+            // Сумма радиусов: голова космолета + кристалл
+            double combinedRadius = _segmentRadius + _foodRadius;
+
+            // Допуск «почти коснулся»: если расстояние меньше суммы радиусов + небольшой запас
+            // Запас нужен, чтобы компенсировать «пропуск» кадра (космолет пролетел между кадрами)
+            double tolerance = 0.4;
+
+            bool ateFood = false;  // ← ОБЪЯВЛЯЕМ ФЛАГ ЗДЕСЬ
+
+            if (distToCrystal <= combinedRadius + tolerance)
             {
-                ateFood = true;
-                Score++;
-                ScoreChanged?.Invoke(this, Score);
-                SpawnFood();
+                Score += 10;
+                ateFood = true;        // ← просто ставим флаг
+                SpawnCrystal();
             }
 
-            // 4. Сохраняем старый хвост (нужен для роста)
+            // запоминаем хвост до сдвига
             Point3D oldTail = _segments[_segments.Count - 1];
 
-            // 5. Сдвигаем все сегменты на новые позиции (длина НЕ меняется)
+            //сдвиг тела
+            //Point3D oldTail = _segments[_segments.Count - 1];
             for (int i = _segments.Count - 1; i > 0; i--)
             {
                 _segments[i] = _segments[i - 1];
@@ -141,20 +183,18 @@ namespace Snake3D
             _segments[0] = newHead;
             _proxy.MoveSegment(0, newHead.X, newHead.Y, newHead.Z, _segmentRadius);
 
-            // 6. Если съели еду — растём: добавляем новый сегмент на старом хвосте
+            //рост
             if (ateFood)
             {
                 _segments.Add(oldTail);
                 _proxy.AddSegment(oldTail.X, oldTail.Y, oldTail.Z, _segmentRadius, _segments.Count - 1);
             }
-            // Если НЕ съели — ничего не удаляем!
-            // Сдвиг уже переместил хвост вперёд, длина списка не изменилась.
 
-            // 7. Самопересечение
-            if (_segments.Count > 3)
+            //пропуск первых 4 сегментов (было 2)
+            if (_segments.Count > 5)
             {
                 var head = _segments[0];
-                for (int i = 2; i < _segments.Count; i++)
+                for (int i = 4; i < _segments.Count; i++)
                 {
                     if (Distance(head, _segments[i]) < 0.1)
                     {
@@ -164,53 +204,56 @@ namespace Snake3D
                 }
             }
 
-            // 8. Перерисовка
-            _proxy.Redraw();
-            //_proxy.FollowHead(0);
+            //камера
+            _proxy.FollowHead(0);
         }
 
-        private bool IsSelfCollision()
+        private void SpawnCrystal()
         {
-            var head = _segments[0];
-            for (int i = 1; i < _segments.Count; i++)
-            {
-                if (Distance(head, _segments[i]) < 0.1)
-                    return true;
-            }
-            return false;
-        }
+            double halfSize = _arenaSize / 2.0;
+            double margin = _segmentRadius + 0.5;
 
-        private void RebuildScene()
-        {
-            _proxy.ClearScene();
-            for (int i = 0; i < _segments.Count; i++)
-            {
-                _proxy.AddSegment(_segments[i].X, _segments[i].Y, _segments[i].Z, _segmentRadius, i);
-            }
-            _proxy.AddFood(_food.X, _food.Y, _food.Z, _foodRadius);
-        }
+            Point3D candidate = new Point3D(0, 0, 0);
+            int attempts = 0;
+            const int maxAttempts = 50;
 
-        //private void SpawnFood()
-        //{
-        //    double x = _random.NextDouble() * (_arenaSize * 2) - _arenaSize;
-        //    double y = _random.NextDouble() * (_arenaSize * 2) - _arenaSize;
-        //    double z = _random.NextDouble() * (_arenaSize * 2) - _arenaSize;
+            bool collidesWithShip;
 
-        //    _food = new Point3D(x, y, z);
-        //    _proxy.AddFood(x, y, z, _foodRadius);
-        //}
-        // Исправленный SpawnFood
-        private void SpawnFood()
-        {
-            // Сначала удаляем старую еду из сцены (наш новый метод)
             _proxy.RemoveFood();
 
-            double x = _random.NextDouble() * (_arenaSize * 2) - _arenaSize;
-            double y = _random.NextDouble() * (_arenaSize * 2) - _arenaSize;
-            double z = _random.NextDouble() * (_arenaSize * 2) - _arenaSize;
+            do
+            {
+                double x = (_random.NextDouble() * (_arenaSize - 2 * margin)) - (halfSize - margin);
+                double y = (_random.NextDouble() * (_arenaSize - 2 * margin)) - (halfSize - margin);
+                double z = (_random.NextDouble() * (_arenaSize - 2 * margin)) - (halfSize - margin);
 
-            _food = new Point3D(x, y, z);
-            _proxy.AddFood(x, y, z, _foodRadius);
+                candidate = new Point3D(x, y, z);
+
+                collidesWithShip = false;
+                foreach (var segment in _segments)
+                {
+                    double dx = segment.X - candidate.X;
+                    double dy = segment.Y - candidate.Y;
+                    double dz = segment.Z - candidate.Z;
+                    double dist = Math.Sqrt(dx * dx + dy * dy + dz * dz);
+
+                    if (dist < (_segmentRadius + _foodRadius))
+                    {
+                        collidesWithShip = true;
+                        break;
+                    }
+                }
+
+                attempts++;
+            } while (collidesWithShip && attempts < maxAttempts);
+
+            if (attempts >= maxAttempts)
+            {
+                candidate = new Point3D(0, 0, 0);
+            }
+
+            _crystalPos = candidate;
+            _proxy.AddCrystal(_crystalPos.X, _crystalPos.Y, _crystalPos.Z, _foodRadius);
         }
 
         private void TriggerGameOver()
@@ -226,6 +269,28 @@ namespace Snake3D
             double dy = a.Y - b.Y;
             double dz = a.Z - b.Z;
             return Math.Sqrt(dx * dx + dy * dy + dz * dz);
+        }
+
+        // Поворот рысканья (вокруг up): лево/право
+        private void RotateYaw(double sign)
+        {
+            _forward = Rotate90(_forward, _up, sign).Normalized();
+        }
+
+        // Поворот тангажа (вокруг right): вверх/вниз
+        private void RotatePitch(double sign)
+        {
+            Vector3D right = Vector3D.CrossProduct(_forward, _up).Normalized();
+            _forward = Rotate90(_forward, right, sign).Normalized();
+            _up = Vector3D.CrossProduct(right, _forward).Normalized();
+        }
+
+        // Вращение на ±90° по формуле Родригеса (cos=0, sin=±1)
+        private static Vector3D Rotate90(Vector3D v, Vector3D axis, double sign)
+        {
+            Vector3D cross = Vector3D.CrossProduct(axis, v);
+            double dot = Vector3D.DotProduct(axis, v);
+            return (cross * sign + axis * dot).Normalized();
         }
     }
 }
