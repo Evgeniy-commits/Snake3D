@@ -1,0 +1,4 @@
+// cpp.hint
+#define Handle(x) opencascade::handle<x>
+#define DEFINE_STANDARD_RTTIEXT(x, y)
+#define DEFINE_STANDARD_RTTI_INLINE(x, y)
