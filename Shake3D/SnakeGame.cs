@@ -49,7 +49,7 @@ namespace Snake3D
             return new Vector3D(X / len, Y / len, Z / len);
         }
     }
-
+    
     public class SnakeGame
     {
         private readonly SnakeSceneProxy _proxy;
@@ -64,8 +64,8 @@ namespace Snake3D
         private int _pendingTurn = 0;  // 0=нет, 1=лево, 2=право, 3=вверх, 4=вниз
 
         private double _segmentRadius = 0.4;
-        private double _step = 1.0;
-        private double _foodRadius = 0.3;
+        private double _step = 1;
+        private double _foodRadius = 0.4;
         private double _arenaSize = 50.0;
         private Random _random = new Random();
 
@@ -75,14 +75,14 @@ namespace Snake3D
 
         public event EventHandler<int>? ScoreChanged;
         public event EventHandler? GameOver;
-
+        
         public SnakeGame(SnakeSceneProxy proxy, double arenaSize, double segmentRadius, double foodRadius)
         {
             _proxy = proxy;
             _arenaSize = arenaSize;
             _segmentRadius = segmentRadius;
             _foodRadius = foodRadius;
-            _segments = new List<Point3D>();          
+            _segments = new List<Point3D>();
         }
 
         public void Start()
@@ -159,7 +159,7 @@ namespace Snake3D
 
             // Допуск «почти коснулся»: если расстояние меньше суммы радиусов + небольшой запас
             // Запас нужен, чтобы компенсировать «пропуск» кадра (космолет пролетел между кадрами)
-            double tolerance = 0.4;
+            double tolerance = 0.8;
 
             bool ateFood = false;  // ← ОБЪЯВЛЯЕМ ФЛАГ ЗДЕСЬ
 
@@ -205,7 +205,8 @@ namespace Snake3D
             }
 
             //камера
-            _proxy.FollowHead(0);
+            _proxy.FollowHead(0);  
+            //_proxy.Redraw();
         }
 
         private void SpawnCrystal()

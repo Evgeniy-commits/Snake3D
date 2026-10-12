@@ -53,7 +53,7 @@ namespace Snake3D
             Proxy.Resize(this.Width, this.Height);
         }
 
-        // НОВЫЙ МЕТОД: Инициализация самой игры (сцена, объекты)
+        //Инициализация самой игры (сцена, объекты)
         public void InitializeGameScene(double arenaSize, double segmentRadius, double foodRadius)
         {
             if (Proxy == null || !_isInitialized) return;

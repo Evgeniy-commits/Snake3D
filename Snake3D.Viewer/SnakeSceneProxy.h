@@ -203,7 +203,7 @@ namespace Snake3DViewer
                 TopoDS_Shape sphere1 = BRepPrimAPI_MakeSphere(gp_Pnt(center.X(), center.Y() + radius, center.Z()), radius).Shape();
                 TopoDS_Shape sphere2 = BRepPrimAPI_MakeSphere(gp_Pnt(center.X(), center.Y() - radius, center.Z()), radius).Shape();
 
-                // OCCT 7.9: Fuse Ч попарно, без Add()
+                //  попарно, без Add()
                 BRepAlgoAPI_Fuse fuse1(cylinder, sphere1);
                 fuse1.Build();
                 if (!fuse1.IsDone())
