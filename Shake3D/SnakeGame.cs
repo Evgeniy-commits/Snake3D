@@ -75,6 +75,13 @@ namespace Snake3D
 
         public event EventHandler<int>? ScoreChanged;
         public event EventHandler? GameOver;
+
+        //Плавный поворот
+        private const double TurnSpeedRadPerSecond = Math.PI ; //90 градусов в секунду
+        private double _yawRate = 0.0;
+        private double _pitchRate = 0.0;
+
+        private bool _isShiftPressed = false;
         
         public SnakeGame(SnakeSceneProxy proxy, double arenaSize, double segmentRadius, double foodRadius)
         {
@@ -83,6 +90,15 @@ namespace Snake3D
             _segmentRadius = segmentRadius;
             _foodRadius = foodRadius;
             _segments = new List<Point3D>();
+
+            // Загрузка модели головы — один раз, до первого Reset()
+            bool ok = _proxy.LoadHeadModel(@"C:\Users\Admin\source\repos\Shake3D\models\Shatl.stp", segmentRadius);
+            if (!ok)
+            {
+                // Файл не прочитался — AddSegment сам откатится на fallback-капсулу,
+                // но полезно знать об этом сразу
+                System.Diagnostics.Debug.WriteLine("Не удалось загрузить модель головы, будет fallback-капсула");
+            }
         }
 
         public void Start()
@@ -107,22 +123,63 @@ namespace Snake3D
             // было _direction = new Vector3D(0,0,1)
             _forward = new Vector3D(0, 1, 0);   // летим вперёд по Y
             _up = new Vector3D(0, 0, 1);   // Z — верх
-            _pendingTurn = 0;                  
+            _pendingTurn = 0;
+            _yawRate = 0.0;
+            _pitchRate = 0.0;
             SpawnCrystal();
             Score = 0;
             ScoreChanged?.Invoke(this, Score);
             _proxy.Redraw();
         }
 
-        public void TurnLeft() { _pendingTurn = 1; }
-        public void TurnRight() { _pendingTurn = 2; }
-        public void TurnUp() { _pendingTurn = 3; }
-        public void TurnDown() { _pendingTurn = 4; }
-       
+        public void SetShiftPressed(bool pressed)
+        {
+            _isShiftPressed = pressed;
+        }
+        public void TurnLeft() 
+        {
+            if (_isShiftPressed) _yawRate = TurnSpeedRadPerSecond;
+            else _pendingTurn = 1;           
+        }
+        public void TurnRight() 
+        {
+            if (_isShiftPressed) _yawRate = -TurnSpeedRadPerSecond;
+            else _pendingTurn = 2;            
+        }
+        public void TurnUp() 
+        {
+            if (_isShiftPressed) _pitchRate = TurnSpeedRadPerSecond;
+            else _pendingTurn = 3;
+        }
+        public void TurnDown() 
+        {
+            if (_isShiftPressed) _pitchRate = -TurnSpeedRadPerSecond;
+            else _pendingTurn = 4;
+        }
+
+        public void StopTurning()
+        {
+            _yawRate = 0.0;
+            _pitchRate = 0.0;
+        }
+
         public void Update()
         {
             if (!IsRunning || IsGameOver) return;
             if (_segments.Count == 0) { TriggerGameOver(); return; }
+
+            double dt = 0.1; //интервал таймера
+
+            //палавный поворот(если есть скорость)
+            if (_yawRate != 0) RotateYawContinuos(_yawRate * dt); 
+            if (_pitchRate != 0) RotatePitchContinuos(_pitchRate * dt);
+
+            _proxy.SetOrientation(
+                _forward.X, _forward.Y, _forward.Z,
+                _up.X, _up.Y, _up.Z);
+
+            //Point3D newHead = _segments[0] + _forward * _step;
+
 
             // применяем один поворот на 90°, если был запрос
             switch (_pendingTurn)
@@ -294,6 +351,33 @@ namespace Snake3D
             Vector3D cross = Vector3D.CrossProduct(axis, v);
             double dot = Vector3D.DotProduct(axis, v);
             return (cross * sign + axis * dot).Normalized();
+        }
+
+        //Плавный поворот
+        private void RotateYawContinuos(double angleRad)
+        {
+            _forward = RotateVector(_forward, _up, angleRad).Normalized();
+        }
+
+        private void RotatePitchContinuos(double angleRad)
+        {
+            var right = Vector3D.CrossProduct(_forward, _up).Normalized();
+            _forward = RotateVector(_forward, right, angleRad).Normalized();
+            _up = Vector3D.CrossProduct(right, _forward).Normalized();
+        }
+
+        private static Vector3D RotateVector(Vector3D v, Vector3D axis, double theta)
+        {
+            axis = axis.Normalized();
+
+            double cosT = Math.Cos(theta);
+            double sinT = Math.Sin(theta);
+
+            var parallel = axis * Vector3D.DotProduct(axis, v);
+            var perpendicular = v - parallel;
+            var rotatedPerp = perpendicular * cosT + Vector3D.CrossProduct(axis, perpendicular) * sinT;
+
+            return parallel + rotatedPerp;
         }
     }
 }

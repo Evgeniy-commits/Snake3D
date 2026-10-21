@@ -1,4 +1,4 @@
-#pragma once
+п»ї#pragma once
 #pragma warning(disable: 4263 4264)
 #include "pch.h"
 #include <Windows.h>
@@ -29,6 +29,12 @@
 #include <vcclr.h>
 #include <msclr/marshal.h>
 #include <Graphic3d_Camera.hxx>
+#include <STEPControl_Reader.hxx>
+#include <IFSelect_ReturnStatus.hxx>
+#include <BRepBuilderAPI_Transform.hxx>
+#include <BRepBndLib.hxx>
+
+#include <msclr/marshal_cppstd.h>
 
 #pragma comment(lib, "TKernel.lib")
 #pragma comment(lib, "TKMath.lib")
@@ -42,6 +48,9 @@
 #pragma comment(lib, "TKTopAlgo.lib")
 #pragma comment(lib, "TKBO.lib")
 #pragma comment(lib, "user32.lib")
+#pragma comment(lib, "TKDESTEP.lib")
+#pragma comment(lib, "TKShHealing.lib")
+
 
 using namespace System;
 using namespace System::Runtime::InteropServices;
@@ -71,14 +80,14 @@ namespace Snake3DViewer
     public ref class SnakeSceneProxy
     {
     private:
-        // OCCT-хендлы через NCollection_Haft
+        // OCCT-С…РµРЅРґР»С‹ С‡РµСЂРµР· NCollection_Haft
         NCollection_Haft<Handle(V3d_Viewer)> _viewer;
         NCollection_Haft<Handle(V3d_View)> _view;
         NCollection_Haft<Handle(AIS_InteractiveContext)> _aisContext;
         NCollection_Haft<Handle(OpenGl_GraphicDriver)> _graphicDriver;
         NCollection_Haft<Handle(AIS_Shape)> _foodShape;
 
-        // Нативные указатели на векторы 
+        // РќР°С‚РёРІРЅС‹Рµ СѓРєР°Р·Р°С‚РµР»Рё РЅР° РІРµРєС‚РѕСЂС‹ 
         std::vector<Handle(AIS_Shape)>* _snakeSegments;
         std::vector<Handle(AIS_Shape)>* _walls;
         std::vector<gp_Pnt>* _basePositions;
@@ -88,6 +97,8 @@ namespace Snake3DViewer
         double _dirX, _dirY, _dirZ;
         double _upX, _upY, _upZ;
 
+        //Р”Р»СЏ STEP
+        TopoDS_Shape* _headModel;
 
     public:
         SnakeSceneProxy()
@@ -104,6 +115,8 @@ namespace Snake3DViewer
 
             _dirX = 0.0;  _dirY = 1.0;  _dirZ = 0.0;
             _upX = 0.0;   _upY = 0.0;   _upZ = 1.0;
+
+            _headModel = nullptr;
         }
 
         ~SnakeSceneProxy()
@@ -114,6 +127,9 @@ namespace Snake3DViewer
             delete _positions;
             _basePositions = nullptr;
             _positions = nullptr;
+
+            delete _headModel; 
+            _headModel = nullptr;
         }
 
         !SnakeSceneProxy()
@@ -124,6 +140,57 @@ namespace Snake3DViewer
             delete _positions;
             _basePositions = nullptr;
             _positions = nullptr;
+
+            delete _headModel; 
+            _headModel = nullptr;
+        }
+
+        bool LoadHeadModel(System::String^ path, double targetRadius)
+        {
+            msclr::interop::marshal_context ctx;
+            std::string nativePath = ctx.marshal_as<std::string>(path);
+
+            STEPControl_Reader reader;
+            if (reader.ReadFile(nativePath.c_str()) != IFSelect_RetDone)
+                return false;
+
+            reader.TransferRoots();
+            if (reader.NbShapes() < 1)
+                return false;
+
+            TopoDS_Shape raw = reader.OneShape();
+
+            //РіР°Р±Р°СЂРёС‚С‹
+            Bnd_Box box;
+            BRepBndLib::Add(raw, box);
+            Standard_Real xmin, ymin, zmin, xmax, ymax, zmax;
+            box.Get(xmin, ymin, zmin, xmax, ymax, zmax);
+
+            double lenY = ymax - ymin;
+            if (lenY < 1e-9)
+                return false;
+
+            // РґР»РёРЅР° РіРѕР»РѕРІС‹ = 4 * radius, РєР°Рє Сѓ СЃС‚Р°СЂРѕР№ РєР°РїСЃСѓР»С‹
+            double scale = (targetRadius * 4.0) / lenY;
+
+            // С†РµРЅС‚СЂ РІ РЅР°С‡Р°Р»Рѕ РєРѕРѕСЂРґРёРЅР°С‚
+            gp_Pnt c((xmin + xmax) / 2.0, (ymin + ymax) / 2.0, (zmin + zmax) / 2.0);
+            gp_Trsf toOrigin;
+            toOrigin.SetTranslation(gp_Vec(c, gp_Pnt(0, 0, 0)));
+
+            TopoDS_Shape centered = BRepBuilderAPI_Transform(raw, toOrigin, Standard_True).Shape();
+
+            gp_Trsf scaler;
+            scaler.SetScale(gp_Pnt(0, 0, 0), scale);
+            TopoDS_Shape scaled = BRepBuilderAPI_Transform(centered, scaler, Standard_True).Shape();
+
+            gp_Trsf reorient;
+            reorient.SetRotation(gp_Ax1(gp_Pnt(0, 0, 0), gp_Dir(0, 0, 1)), -M_PI / 2.0);
+            scaled = BRepBuilderAPI_Transform(scaled, reorient, Standard_True).Shape();
+
+            delete _headModel;
+            _headModel = new TopoDS_Shape(scaled);
+            return true;
         }
 
         bool Initialize(System::IntPtr windowHandle)
@@ -149,11 +216,11 @@ namespace Snake3DViewer
                 _view()->MustBeResized();
                 _view()->Redraw();
 
-                // Настройка камеры: перспективная проекция, угол обзора 45 градусов
+                // РќР°СЃС‚СЂРѕР№РєР° РєР°РјРµСЂС‹: РїРµСЂСЃРїРµРєС‚РёРІРЅР°СЏ РїСЂРѕРµРєС†РёСЏ, СѓРіРѕР» РѕР±Р·РѕСЂР° 45 РіСЂР°РґСѓСЃРѕРІ
                 _view()->Camera()->SetProjectionType(Graphic3d_Camera::Projection_Perspective);
                 _view()->Camera()->SetFOVy(45.0);
 
-                // Начальный угол камеры (смотрим немного сверху и сбоку)
+                // РќР°С‡Р°Р»СЊРЅС‹Р№ СѓРіРѕР» РєР°РјРµСЂС‹ (СЃРјРѕС‚СЂРёРј РЅРµРјРЅРѕРіРѕ СЃРІРµСЂС…Сѓ Рё СЃР±РѕРєСѓ)
                 _view()->SetProj(V3d_XposYposZpos);
                 _view()->Redraw();
             }
@@ -165,22 +232,22 @@ namespace Snake3DViewer
             return true;
         }
 
-        // Метод изменения размера: использует WinAPI SetWindowPos
+        // РњРµС‚РѕРґ РёР·РјРµРЅРµРЅРёСЏ СЂР°Р·РјРµСЂР°: РёСЃРїРѕР»СЊР·СѓРµС‚ WinAPI SetWindowPos
         void Resize(int width, int height)
         {
             if (!_view().IsNull() && !_view()->Window().IsNull())
             {
-                // 1. Правильный DownCast: Aspect_Window -> WNT_Window
+                // 1. РџСЂР°РІРёР»СЊРЅС‹Р№ DownCast: Aspect_Window -> WNT_Window
                 Handle(WNT_Window) wntWindow = Handle(WNT_Window)::DownCast(_view()->Window());
 
                 if (!wntWindow.IsNull())
                 {
-                    // 2. Правильный каст: Aspect_Drawable (void*) -> HWND
+                    // 2. РџСЂР°РІРёР»СЊРЅС‹Р№ РєР°СЃС‚: Aspect_Drawable (void*) -> HWND
                     HWND hwnd = reinterpret_cast<HWND>(wntWindow->NativeHandle());
 
                     if (hwnd != NULL)
                     {
-                        // Вызываем стандартный WinAPI для изменения размера окна
+                        // Р’С‹Р·С‹РІР°РµРј СЃС‚Р°РЅРґР°СЂС‚РЅС‹Р№ WinAPI РґР»СЏ РёР·РјРµРЅРµРЅРёСЏ СЂР°Р·РјРµСЂР° РѕРєРЅР°
                         SetWindowPos(hwnd, NULL, 0, 0, width, height, SWP_NOZORDER | SWP_NOACTIVATE);
 
                         _view()->MustBeResized();
@@ -206,47 +273,102 @@ namespace Snake3DViewer
                 _aisContext()->UpdateCurrentViewer();
         }
 
+        //void AddSegment(double x, double y, double z, double radius, int index)
+        //{
+        //    gp_Pnt center(x, y, z);
+        //    Handle(AIS_Shape) aisShape;
+
+        //    if (index == 0)
+        //    {
+        //        // Р“РѕР»РѕРІР° вЂ” СЃРµСЂРµР±СЂРёСЃС‚Р°СЏ РєР°РїСЃСѓР»Р° (РєРѕСЃРјРѕР»РµС‚)
+        //        gp_Ax2 ax2(gp_Pnt(center.X(), center.Y() - radius, center.Z()), gp_Dir(0, 1, 0));
+        //        TopoDS_Shape cylinder = BRepPrimAPI_MakeCylinder(ax2, radius, radius * 2).Shape();
+        //        TopoDS_Shape sphere1 = BRepPrimAPI_MakeSphere(gp_Pnt(center.X(), center.Y() + radius, center.Z()), radius).Shape();
+        //        TopoDS_Shape sphere2 = BRepPrimAPI_MakeSphere(gp_Pnt(center.X(), center.Y() - radius, center.Z()), radius).Shape();
+
+        //        //  РїРѕРїР°СЂРЅРѕ, Р±РµР· Add()
+        //        BRepAlgoAPI_Fuse fuse1(cylinder, sphere1);
+        //        fuse1.Build();
+        //        if (!fuse1.IsDone())
+        //        {
+        //            BRepPrimAPI_MakeSphere fallback(center, radius);
+        //            aisShape = new AIS_Shape(fallback.Shape());
+        //            aisShape->SetColor(Quantity_Color(Quantity_NOC_RED));
+        //        }
+        //        else
+        //        {
+        //            BRepAlgoAPI_Fuse fuse2(fuse1.Shape(), sphere2);
+        //            fuse2.Build();
+        //            if (fuse2.IsDone())
+        //            {
+        //                aisShape = new AIS_Shape(fuse2.Shape());
+        //            }
+        //            else
+        //            {
+        //                aisShape = new AIS_Shape(fuse1.Shape());
+        //            }
+        //            // РЎРµСЂРµР±СЂРёСЃС‚С‹Р№ С†РІРµС‚ С‡РµСЂРµР· RGB (0.75, 0.75, 0.75)
+        //            aisShape->SetColor(Quantity_Color(0.75, 0.75, 0.75, Quantity_TOC_RGB));
+        //        }
+        //    }
+        //    else
+        //    {
+        //        // РўРµР»Рѕ вЂ” СЃРёРЅРёРµ СЃС„РµСЂС‹
+        //        BRepPrimAPI_MakeSphere sphere(center, radius);
+        //        aisShape = new AIS_Shape(sphere.Shape());
+        //        aisShape->SetColor(Quantity_Color(Quantity_NOC_BLUE));
+        //    }
+
+        //    aisShape->SetDisplayMode(1);
+        //    _snakeSegments->push_back(aisShape);
+        //    _basePositions->push_back(center);
+        //    _positions->push_back(center);
+        //    _aisContext()->Display(aisShape, Standard_True);
+        //}
+
+
         void AddSegment(double x, double y, double z, double radius, int index)
         {
             gp_Pnt center(x, y, z);
             Handle(AIS_Shape) aisShape;
+            gp_Pnt basePos = center;   // Р±Р°Р·Р° РїРѕ СѓРјРѕР»С‡Р°РЅРёСЋ вЂ” С‚РѕС‡РєР° РїРѕСЃС‚СЂРѕРµРЅРёСЏ
 
             if (index == 0)
             {
-                // Голова — серебристая капсула (космолет)
-                gp_Ax2 ax2(gp_Pnt(center.X(), center.Y() - radius, center.Z()), gp_Dir(0, 1, 0));
-                TopoDS_Shape cylinder = BRepPrimAPI_MakeCylinder(ax2, radius, radius * 2).Shape();
-                TopoDS_Shape sphere1 = BRepPrimAPI_MakeSphere(gp_Pnt(center.X(), center.Y() + radius, center.Z()), radius).Shape();
-                TopoDS_Shape sphere2 = BRepPrimAPI_MakeSphere(gp_Pnt(center.X(), center.Y() - radius, center.Z()), radius).Shape();
-
-                //  попарно, без Add()
-                BRepAlgoAPI_Fuse fuse1(cylinder, sphere1);
-                fuse1.Build();
-                if (!fuse1.IsDone())
+                if (_headModel != nullptr)
                 {
-                    BRepPrimAPI_MakeSphere fallback(center, radius);
-                    aisShape = new AIS_Shape(fallback.Shape());
-                    aisShape->SetColor(Quantity_Color(Quantity_NOC_RED));
+                    // Р“РѕР»РѕРІР° вЂ” Р·Р°РіСЂСѓР¶РµРЅРЅР°СЏ .step-РјРѕРґРµР»СЊ
+                    aisShape = new AIS_Shape(*_headModel);
+                    basePos = gp_Pnt(0, 0, 0);   // РјРѕРґРµР»СЊ С†РµРЅС‚СЂРёСЂРѕРІР°РЅР° РІ РЅСѓР»Рµ вЂ” РІСЂР°С‰РµРЅРёРµ РІРѕРєСЂСѓРі РЅРµРіРѕ
                 }
                 else
                 {
-                    BRepAlgoAPI_Fuse fuse2(fuse1.Shape(), sphere2);
-                    fuse2.Build();
-                    if (fuse2.IsDone())
+                    // Fallback вЂ” СЃС‚Р°СЂР°СЏ РєР°РїСЃСѓР»Р° (СЃ РёСЃРїСЂР°РІР»РµРЅРЅРѕР№ Р±Р°Р·РѕР№ С†РёР»РёРЅРґСЂР°)
+                    gp_Ax2 ax2(gp_Pnt(center.X(), center.Y() - radius, center.Z()), gp_Dir(0, 1, 0));
+                    TopoDS_Shape cylinder = BRepPrimAPI_MakeCylinder(ax2, radius, radius * 2).Shape();
+                    TopoDS_Shape sphere1 = BRepPrimAPI_MakeSphere(gp_Pnt(center.X(), center.Y() + radius, center.Z()), radius).Shape();
+                    TopoDS_Shape sphere2 = BRepPrimAPI_MakeSphere(gp_Pnt(center.X(), center.Y() - radius, center.Z()), radius).Shape();
+
+                    BRepAlgoAPI_Fuse fuse1(cylinder, sphere1);
+                    fuse1.Build();
+                    if (!fuse1.IsDone())
                     {
-                        aisShape = new AIS_Shape(fuse2.Shape());
+                        BRepPrimAPI_MakeSphere fallback(center, radius);
+                        aisShape = new AIS_Shape(fallback.Shape());
+                        aisShape->SetColor(Quantity_Color(Quantity_NOC_RED));
                     }
                     else
                     {
-                        aisShape = new AIS_Shape(fuse1.Shape());
+                        BRepAlgoAPI_Fuse fuse2(fuse1.Shape(), sphere2);
+                        fuse2.Build();
+                        aisShape = new AIS_Shape(fuse2.IsDone() ? fuse2.Shape() : fuse1.Shape());
+                        aisShape->SetColor(Quantity_Color(0.75, 0.75, 0.75, Quantity_TOC_RGB));
                     }
-                    // Серебристый цвет через RGB (0.75, 0.75, 0.75)
-                    aisShape->SetColor(Quantity_Color(0.75, 0.75, 0.75, Quantity_TOC_RGB));
                 }
             }
             else
             {
-                // Тело — синие сферы
+                // РўРµР»Рѕ вЂ” СЃРёРЅРёРµ СЃС„РµСЂС‹
                 BRepPrimAPI_MakeSphere sphere(center, radius);
                 aisShape = new AIS_Shape(sphere.Shape());
                 aisShape->SetColor(Quantity_Color(Quantity_NOC_BLUE));
@@ -254,7 +376,7 @@ namespace Snake3DViewer
 
             aisShape->SetDisplayMode(1);
             _snakeSegments->push_back(aisShape);
-            _basePositions->push_back(center);
+            _basePositions->push_back(basePos);   // в†ђ РІРјРµСЃС‚Рѕ push_back(center)
             _positions->push_back(center);
             _aisContext()->Display(aisShape, Standard_True);
         }
@@ -275,11 +397,11 @@ namespace Snake3DViewer
             trsf.SetTranslation(gp_Vec((*_basePositions)[index], newPos));
             (*_snakeSegments)[index]->SetLocalTransformation(trsf);
 
-           /* Quantity_Color color = (index == 0)
+            Quantity_Color color = (index == 0)
                 ? Quantity_Color(Quantity_NOC_RED)
                 : Quantity_Color(Quantity_NOC_BLUE);
             (*_snakeSegments)[index]->SetColor(color);
-            _aisContext()->Redisplay((*_snakeSegments)[index], Standard_True);*/
+            //_aisContext()->Redisplay((*_snakeSegments)[index], Standard_True);
             _aisContext()->Redisplay((*_snakeSegments)[index], Standard_False);
         }
 
@@ -298,7 +420,7 @@ namespace Snake3DViewer
             up = gp_Dir(right.Crossed(fwd));
 
             gp_Trsf trsf;
-            // столбцы матрицы: локальный X -> right, Y -> fwd, Z -> up
+            // СЃС‚РѕР»Р±С†С‹ РјР°С‚СЂРёС†С‹: Р»РѕРєР°Р»СЊРЅС‹Р№ X -> right, Y -> fwd, Z -> up
             trsf.SetValues(
                 right.X(), fwd.X(), up.X(), newPos.X() - (*_basePositions)[headIndex].X(),
                 right.Y(), fwd.Y(), up.Y(), newPos.Y() - (*_basePositions)[headIndex].Y(),
@@ -322,28 +444,28 @@ namespace Snake3DViewer
             double half = arenaSize / 2.0;
             double thickness = 1.0;
 
-            // Левая
+            // Р›РµРІР°СЏ
             TopoDS_Shape w1 = BRepPrimAPI_MakeBox(
                 gp_Pnt(-half + thickness / 2.0, 0, 0),
                 thickness, arenaSize, arenaSize
             ).Shape();
             AddWall(w1);
 
-            // Правая
+            // РџСЂР°РІР°СЏ
             TopoDS_Shape w2 = BRepPrimAPI_MakeBox(
                 gp_Pnt(half - thickness / 2.0, 0, 0),
                 thickness, arenaSize, arenaSize
             ).Shape();
             AddWall(w2);
 
-            // Задняя
+            // Р—Р°РґРЅСЏСЏ
             TopoDS_Shape w3 = BRepPrimAPI_MakeBox(
                 gp_Pnt(0, -half + thickness / 2.0, 0),
                 arenaSize, thickness, arenaSize
             ).Shape();
             AddWall(w3);
 
-            // Передняя
+            // РџРµСЂРµРґРЅСЏСЏ
             TopoDS_Shape w4 = BRepPrimAPI_MakeBox(
                 gp_Pnt(0, half - thickness / 2.0, 0),
                 arenaSize, thickness, arenaSize
@@ -356,21 +478,21 @@ namespace Snake3DViewer
             double half = size / 2.0;
             double step = size / 10.0;
 
-            // --- Стена 1: Задняя (Z = -half) ---
+            // --- РЎС‚РµРЅР° 1: Р—Р°РґРЅСЏСЏ (Z = -half) ---
             for (double s = -half; s <= half + 0.001; s += step)
             {
                 AddArenaLine(gp_Pnt(s, -half, -half), gp_Pnt(s, half, -half));
                 AddArenaLine(gp_Pnt(-half, s, -half), gp_Pnt(half, s, -half));
             }
 
-            // --- Стена 2: Левая (X = -half) ---
+            // --- РЎС‚РµРЅР° 2: Р›РµРІР°СЏ (X = -half) ---
             for (double s = -half; s <= half + 0.001; s += step)
             {
                 AddArenaLine(gp_Pnt(-half, s, -half), gp_Pnt(-half, s, half));
                 AddArenaLine(gp_Pnt(-half, -half, s), gp_Pnt(-half, half, s));
             }
 
-            // --- Стена 3: Правая (X = +half) ---
+            // --- РЎС‚РµРЅР° 3: РџСЂР°РІР°СЏ (X = +half) ---
             for (double s = -half; s <= half + 0.001; s += step)
             {
                 AddArenaLine(gp_Pnt(half, s, -half), gp_Pnt(half, s, half));
@@ -415,10 +537,10 @@ namespace Snake3DViewer
             BRepBuilderAPI_MakeEdge edge(p1, p2);
             Handle(AIS_Shape) aisEdge = new AIS_Shape(edge.Shape());
 
-            // Режим 0 = только каркас (линии), это важно для сетки
+            // Р РµР¶РёРј 0 = С‚РѕР»СЊРєРѕ РєР°СЂРєР°СЃ (Р»РёРЅРёРё), СЌС‚Рѕ РІР°Р¶РЅРѕ РґР»СЏ СЃРµС‚РєРё
             aisEdge->SetDisplayMode(0);
 
-            // Создаем серый цвет вручную (R=105, G=105, B=105 примерно как DIMGRAY)
+            // РЎРѕР·РґР°РµРј СЃРµСЂС‹Р№ С†РІРµС‚ РІСЂСѓС‡РЅСѓСЋ (R=105, G=105, B=105 РїСЂРёРјРµСЂРЅРѕ РєР°Рє DIMGRAY)
             aisEdge->SetColor(Quantity_Color(Quantity_NOC_BLUEVIOLET));
 
             _aisContext()->Display(aisEdge, Standard_True);
@@ -430,28 +552,28 @@ namespace Snake3DViewer
 
             double half = arenaSize / 2.0;
 
-            // --- Стена 1: Задняя (Z = -half) ---
+            // --- РЎС‚РµРЅР° 1: Р—Р°РґРЅСЏСЏ (Z = -half) ---
             for (double s = -half; s <= half + 0.001; s += step)
             {
                 AddArenaLine(gp_Pnt(s, -half, -half), gp_Pnt(s, half, -half));
                 AddArenaLine(gp_Pnt(-half, s, -half), gp_Pnt(half, s, -half));
             }
 
-            // --- Стена 2: Левая (X = -half) ---
+            // --- РЎС‚РµРЅР° 2: Р›РµРІР°СЏ (X = -half) ---
             for (double s = -half; s <= half + 0.001; s += step)
             {
                 AddArenaLine(gp_Pnt(-half, s, -half), gp_Pnt(-half, s, half));
                 AddArenaLine(gp_Pnt(-half, -half, s), gp_Pnt(-half, half, s));
             }
 
-            // --- Стена 3: Правая (X = +half) ---
+            // --- РЎС‚РµРЅР° 3: РџСЂР°РІР°СЏ (X = +half) ---
             for (double s = -half; s <= half + 0.001; s += step)
             {
                 AddArenaLine(gp_Pnt(half, s, -half), gp_Pnt(half, s, half));
                 AddArenaLine(gp_Pnt(half, -half, s), gp_Pnt(half, half, s));
             }
 
-            // --- Стена 4: Пол (Y = -half) ---
+            // --- РЎС‚РµРЅР° 4: РџРѕР» (Y = -half) ---
             for (double s = -half; s <= half + 0.001; s += step)
             {
                 AddArenaLine(gp_Pnt(s, -half, -half), gp_Pnt(s, -half, half));
@@ -514,40 +636,40 @@ namespace Snake3DViewer
         
         void RemoveSegment(int index)
         {
-            // 1. Проверка границ
+            // 1. РџСЂРѕРІРµСЂРєР° РіСЂР°РЅРёС†
             if (index < 0 || index >= static_cast<int>(_snakeSegments->size()))
                 return;
 
-            // 2. Получаем указатель на объект AIS_Shape
+            // 2. РџРѕР»СѓС‡Р°РµРј СѓРєР°Р·Р°С‚РµР»СЊ РЅР° РѕР±СЉРµРєС‚ AIS_Shape
             Handle(AIS_Shape) shapeToRemove = (*_snakeSegments)[index];
 
-            // 3. Удаляем объект из контекста отображения (это убирает его с экрана)
+            // 3. РЈРґР°Р»СЏРµРј РѕР±СЉРµРєС‚ РёР· РєРѕРЅС‚РµРєСЃС‚Р° РѕС‚РѕР±СЂР°Р¶РµРЅРёСЏ (СЌС‚Рѕ СѓР±РёСЂР°РµС‚ РµРіРѕ СЃ СЌРєСЂР°РЅР°)
             if (!_aisContext().IsNull())
             {
                 _aisContext()->Erase(shapeToRemove, Standard_False);
             }
 
-            // 4. Удаляем ссылку из нашего локального вектора
-            // erase сдвинет все последующие элементы влево на 1 позицию
+            // 4. РЈРґР°Р»СЏРµРј СЃСЃС‹Р»РєСѓ РёР· РЅР°С€РµРіРѕ Р»РѕРєР°Р»СЊРЅРѕРіРѕ РІРµРєС‚РѕСЂР°
+            // erase СЃРґРІРёРЅРµС‚ РІСЃРµ РїРѕСЃР»РµРґСѓСЋС‰РёРµ СЌР»РµРјРµРЅС‚С‹ РІР»РµРІРѕ РЅР° 1 РїРѕР·РёС†РёСЋ
             _snakeSegments->erase(_snakeSegments->begin() + index);
             _basePositions->erase(_basePositions->begin() + index);
             _positions->erase(_positions->begin() + index);
 
-            // 5. ВАЖНО: В OCCT индексы в векторе должны совпадать с логикой C#
-            // Так как мы используем erase, элементы после удаленного автоматически сдвинулись.
-            // Нам НЕ нужно вызывать MoveSegment для обновления индексов, 
-            // потому что в C# мы будем обращаться к ним по новым индексам.
-            // Однако, если в C# вы храните старые индексы, логика сломается.
-            // При правильной реализации в C# (сдвиг списка перед удалением) это сработает идеально.
+            // 5. Р’РђР–РќРћ: Р’ OCCT РёРЅРґРµРєСЃС‹ РІ РІРµРєС‚РѕСЂРµ РґРѕР»Р¶РЅС‹ СЃРѕРІРїР°РґР°С‚СЊ СЃ Р»РѕРіРёРєРѕР№ C#
+            // РўР°Рє РєР°Рє РјС‹ РёСЃРїРѕР»СЊР·СѓРµРј erase, СЌР»РµРјРµРЅС‚С‹ РїРѕСЃР»Рµ СѓРґР°Р»РµРЅРЅРѕРіРѕ Р°РІС‚РѕРјР°С‚РёС‡РµСЃРєРё СЃРґРІРёРЅСѓР»РёСЃСЊ.
+            // РќР°Рј РќР• РЅСѓР¶РЅРѕ РІС‹Р·С‹РІР°С‚СЊ MoveSegment РґР»СЏ РѕР±РЅРѕРІР»РµРЅРёСЏ РёРЅРґРµРєСЃРѕРІ, 
+            // РїРѕС‚РѕРјСѓ С‡С‚Рѕ РІ C# РјС‹ Р±СѓРґРµРј РѕР±СЂР°С‰Р°С‚СЊСЃСЏ Рє РЅРёРј РїРѕ РЅРѕРІС‹Рј РёРЅРґРµРєСЃР°Рј.
+            // РћРґРЅР°РєРѕ, РµСЃР»Рё РІ C# РІС‹ С…СЂР°РЅРёС‚Рµ СЃС‚Р°СЂС‹Рµ РёРЅРґРµРєСЃС‹, Р»РѕРіРёРєР° СЃР»РѕРјР°РµС‚СЃСЏ.
+            // РџСЂРё РїСЂР°РІРёР»СЊРЅРѕР№ СЂРµР°Р»РёР·Р°С†РёРё РІ C# (СЃРґРІРёРі СЃРїРёСЃРєР° РїРµСЂРµРґ СѓРґР°Р»РµРЅРёРµРј) СЌС‚Рѕ СЃСЂР°Р±РѕС‚Р°РµС‚ РёРґРµР°Р»СЊРЅРѕ.
         }
 
         void RemoveFood()
         {
-            // Удаляем еду из контекста, если она существует
+            // РЈРґР°Р»СЏРµРј РµРґСѓ РёР· РєРѕРЅС‚РµРєСЃС‚Р°, РµСЃР»Рё РѕРЅР° СЃСѓС‰РµСЃС‚РІСѓРµС‚
             if (!_foodShape().IsNull() && !_aisContext().IsNull())
             {
                 _aisContext()->Erase(_foodShape(), Standard_False);
-                _foodShape() = Handle(AIS_Shape)(); // Обнуляем хендл
+                _foodShape() = Handle(AIS_Shape)(); // РћР±РЅСѓР»СЏРµРј С…РµРЅРґР»
             }
         }
 
@@ -583,7 +705,7 @@ namespace Snake3DViewer
             Handle(AIS_Shape) headShape = (*_snakeSegments)[headIndex];
             if (headShape.IsNull()) return;
 
-            // 1. Центр головы
+            // 1. Р¦РµРЅС‚СЂ РіРѕР»РѕРІС‹
             Bnd_Box box;
             BRepBndLib::Add(headShape->Shape(), box);
             Standard_Real minX, minY, minZ, maxX, maxY, maxZ;
@@ -596,27 +718,27 @@ namespace Snake3DViewer
             double cy = (*_positions)[headIndex].Y();
             double cz = (*_positions)[headIndex].Z();
 
-            // 2. Камера: позади по forward, выше по up, смотрит вперёд
+            // 2. РљР°РјРµСЂР°: РїРѕР·Р°РґРё РїРѕ forward, РІС‹С€Рµ РїРѕ up, СЃРјРѕС‚СЂРёС‚ РІРїРµСЂС‘Рґ
             double camBack = 10.0;
             double camUp = 3.0;
             double lookAhead = 4.0;
 
-            // Eye = голова - forward*camBack + up*camUp
+            // Eye = РіРѕР»РѕРІР° - forward*camBack + up*camUp
             double desiredEyeX = cx - _dirX * camBack + _upX * camUp;
             double desiredEyeY = cy - _dirY * camBack + _upY * camUp;
             double desiredEyeZ = cz - _dirZ * camBack + _upZ * camUp;
 
-            // At = голова + forward*lookAhead
+            // At = РіРѕР»РѕРІР° + forward*lookAhead
             double desiredAtX = cx + _dirX * lookAhead;
             double desiredAtY = cy + _dirY * lookAhead;
             double desiredAtZ = cz + _dirZ * lookAhead;
 
-            // 3. Текущие позиции
+            // 3. РўРµРєСѓС‰РёРµ РїРѕР·РёС†РёРё
             Handle(Graphic3d_Camera) cam = _view()->Camera();
             gp_Pnt currentEye = cam->Eye();
             gp_Pnt currentAt = cam->Center();
 
-            // 4. Lerp — запаздывание камеры
+            // 4. Lerp вЂ” Р·Р°РїР°Р·РґС‹РІР°РЅРёРµ РєР°РјРµСЂС‹
             double speed = 0.08;
 
             double newEyeX = currentEye.X() + (desiredEyeX - currentEye.X()) * speed;
@@ -627,7 +749,7 @@ namespace Snake3DViewer
             double newAtY = currentAt.Y() + (desiredAtY - currentAt.Y()) * speed;
             double newAtZ = currentAt.Z() + (desiredAtZ - currentAt.Z()) * speed;
 
-            // 5. Применение: позиция + вектор up (камера вращается с кораблём)
+            // 5. РџСЂРёРјРµРЅРµРЅРёРµ: РїРѕР·РёС†РёСЏ + РІРµРєС‚РѕСЂ up (РєР°РјРµСЂР° РІСЂР°С‰Р°РµС‚СЃСЏ СЃ РєРѕСЂР°Р±Р»С‘Рј)
             cam->SetEye(gp_Pnt(newEyeX, newEyeY, newEyeZ));
             cam->SetCenter(gp_Pnt(newAtX, newAtY, newAtZ));
             cam->SetUp(gp_Dir(_upX, _upY, _upZ));

@@ -72,6 +72,7 @@ namespace Snake3D
 
                 // 7. События мыши/клавиатуры
                 PreviewKeyDown += SnakeView_PreviewKeyDown;
+                PreviewKeyDown += SnakeView_PreviewKeyUp;
                 PreviewMouseDown += SnakeView_PreviewMouseDown;
                 PreviewMouseMove += SnakeView_PreviewMouseMove;
                 PreviewMouseUp += SnakeView_PreviewMouseUp;
@@ -88,6 +89,11 @@ namespace Snake3D
         private void SnakeView_PreviewKeyDown(object sender, KeyEventArgs e)
         {
             if (_game == null) return;
+
+            if (e.Key == Key.LeftShift || e.Key == Key.RightShift)
+            {
+                _game.SetShiftPressed(true);
+            }
 
             switch (e.Key)
             {
@@ -114,6 +120,17 @@ namespace Snake3D
                 case Key.Down:
                     _game.TurnDown();        // было SetDirection(0,-1,0)
                     break;                   
+            }
+        }
+        private void SnakeView_PreviewKeyUp(object sender, KeyEventArgs e)
+        {
+            if (_game == null) return;
+
+            if (e.Key == Key.LeftShift || e.Key == Key.RightShift)
+            {
+                _game.SetShiftPressed(false);
+                _game.StopTurning();
+                return;
             }
         }
 
