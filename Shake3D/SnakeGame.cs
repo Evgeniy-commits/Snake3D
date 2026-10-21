@@ -64,7 +64,7 @@ namespace Snake3D
         private int _pendingTurn = 0;  // 0=нет, 1=лево, 2=право, 3=вверх, 4=вниз
 
         private double _segmentRadius = 0.4;
-        private double _step = 1;
+        private double _step = 1.0;
         private double _foodRadius = 0.4;
         private double _arenaSize = 50.0;
         private Random _random = new Random();
@@ -178,10 +178,12 @@ namespace Snake3D
             for (int i = _segments.Count - 1; i > 0; i--)
             {
                 _segments[i] = _segments[i - 1];
-                _proxy.MoveSegment(i, _segments[i].X, _segments[i].Y, _segments[i].Z, _segmentRadius);
+                _proxy.MoveSegment(i, _segments[i].X, _segments[i].Y, _segments[i].Z);
             }
             _segments[0] = newHead;
-            _proxy.MoveSegment(0, newHead.X, newHead.Y, newHead.Z, _segmentRadius);
+            _proxy.SetOrientation(_forward.X, _forward.Y, _forward.Z, _up.X, _up.Y, _up.Z);
+            //_proxy.MoveSegment(0, newHead.X, newHead.Y, newHead.Z);
+            _proxy.MoveHead(0, newHead.X, newHead.Y, newHead.Z);
 
             //рост
             if (ateFood)

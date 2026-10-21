@@ -81,9 +81,13 @@ namespace Snake3DViewer
         // Нативные указатели на векторы 
         std::vector<Handle(AIS_Shape)>* _snakeSegments;
         std::vector<Handle(AIS_Shape)>* _walls;
+        std::vector<gp_Pnt>* _basePositions;
+        std::vector<gp_Pnt>* _positions;
+
 
         double _dirX, _dirY, _dirZ;
         double _upX, _upY, _upZ;
+
 
     public:
         SnakeSceneProxy()
@@ -95,6 +99,8 @@ namespace Snake3DViewer
             _foodShape() = NULL;
             _snakeSegments = new std::vector<Handle(AIS_Shape)>();
             _walls = new std::vector<Handle(AIS_Shape)>();
+            _basePositions = new std::vector<gp_Pnt>();
+            _positions = new std::vector<gp_Pnt>();
 
             _dirX = 0.0;  _dirY = 1.0;  _dirZ = 0.0;
             _upX = 0.0;   _upY = 0.0;   _upZ = 1.0;
@@ -104,12 +110,20 @@ namespace Snake3DViewer
         {
             delete _snakeSegments;
             delete _walls;
+            delete _basePositions;
+            delete _positions;
+            _basePositions = nullptr;
+            _positions = nullptr;
         }
 
         !SnakeSceneProxy()
         {
             delete _snakeSegments;
             delete _walls;
+            delete _basePositions;
+            delete _positions;
+            _basePositions = nullptr;
+            _positions = nullptr;
         }
 
         bool Initialize(System::IntPtr windowHandle)
@@ -185,6 +199,8 @@ namespace Snake3DViewer
                 _aisContext()->EraseAll(Standard_False);
             _snakeSegments->clear();
             _walls->clear();
+            _basePositions->clear();
+            _positions->clear();
             _foodShape() = Handle(AIS_Shape)();
             if (!_aisContext().IsNull())
                 _aisContext()->UpdateCurrentViewer();
@@ -198,7 +214,7 @@ namespace Snake3DViewer
             if (index == 0)
             {
                 // Голова — серебристая капсула (космолет)
-                gp_Ax2 ax2(center, gp_Dir(0, 1, 0));
+                gp_Ax2 ax2(gp_Pnt(center.X(), center.Y() - radius, center.Z()), gp_Dir(0, 1, 0));
                 TopoDS_Shape cylinder = BRepPrimAPI_MakeCylinder(ax2, radius, radius * 2).Shape();
                 TopoDS_Shape sphere1 = BRepPrimAPI_MakeSphere(gp_Pnt(center.X(), center.Y() + radius, center.Z()), radius).Shape();
                 TopoDS_Shape sphere2 = BRepPrimAPI_MakeSphere(gp_Pnt(center.X(), center.Y() - radius, center.Z()), radius).Shape();
@@ -238,25 +254,58 @@ namespace Snake3DViewer
 
             aisShape->SetDisplayMode(1);
             _snakeSegments->push_back(aisShape);
+            _basePositions->push_back(center);
+            _positions->push_back(center);
             _aisContext()->Display(aisShape, Standard_True);
         }
 
-        void MoveSegment(int index, double x, double y, double z, double radius)
+        void MoveSegment(int index, double x, double y, double z)
         {
             if (index < 0 || index >= static_cast<int>(_snakeSegments->size())) return;
-            gp_Pnt newCenter(x, y, z);
-            BRepPrimAPI_MakeSphere sphere(newCenter, radius);
+            gp_Pnt newPos(x, y, z);
+            //gp_Pnt newCenter(x, y, z);
+            //BRepPrimAPI_MakeSphere sphere(newCenter, radius);
            /* gp_Dir axis(0, 0, 1);
             TopoDS_Shape newShape = CreateCapsule(newCenter, axis, radius * 2, radius);
             (*_snakeSegments)[index]->SetShape(newShape);*/
+            //(*_snakeSegments)[index]->SetShape(sphere.Shape());
 
-            (*_snakeSegments)[index]->SetShape(sphere.Shape());
+            (*_positions)[index] = newPos;
+            gp_Trsf trsf;
+            trsf.SetTranslation(gp_Vec((*_basePositions)[index], newPos));
+            (*_snakeSegments)[index]->SetLocalTransformation(trsf);
 
-            Quantity_Color color = (index == 0)
+           /* Quantity_Color color = (index == 0)
                 ? Quantity_Color(Quantity_NOC_RED)
                 : Quantity_Color(Quantity_NOC_BLUE);
             (*_snakeSegments)[index]->SetColor(color);
-            _aisContext()->Redisplay((*_snakeSegments)[index], Standard_True);
+            _aisContext()->Redisplay((*_snakeSegments)[index], Standard_True);*/
+            _aisContext()->Redisplay((*_snakeSegments)[index], Standard_False);
+        }
+
+        void MoveHead(int headIndex, double x, double y, double z)
+        {
+            if (headIndex < 0 || (size_t)headIndex >= _snakeSegments->size()) return;
+            if ((*_snakeSegments)[headIndex].IsNull()) return;
+
+            gp_Pnt newPos(x, y, z);
+            (*_positions)[headIndex] = newPos;
+
+            gp_Dir fwd(_dirX, _dirY, _dirZ);
+            gp_Dir up(_upX, _upY, _upZ);
+
+            gp_Dir right(fwd.Crossed(up));
+            up = gp_Dir(right.Crossed(fwd));
+
+            gp_Trsf trsf;
+            // столбцы матрицы: локальный X -> right, Y -> fwd, Z -> up
+            trsf.SetValues(
+                right.X(), fwd.X(), up.X(), newPos.X() - (*_basePositions)[headIndex].X(),
+                right.Y(), fwd.Y(), up.Y(), newPos.Y() - (*_basePositions)[headIndex].Y(),
+                right.Z(), fwd.Z(), up.Z(), newPos.Z() - (*_basePositions)[headIndex].Z());
+
+            (*_snakeSegments)[headIndex]->SetLocalTransformation(trsf);
+            _aisContext()->Redisplay((*_snakeSegments)[headIndex], Standard_False);
         }
 
         void AddWall(TopoDS_Shape shape)
@@ -481,6 +530,8 @@ namespace Snake3DViewer
             // 4. Удаляем ссылку из нашего локального вектора
             // erase сдвинет все последующие элементы влево на 1 позицию
             _snakeSegments->erase(_snakeSegments->begin() + index);
+            _basePositions->erase(_basePositions->begin() + index);
+            _positions->erase(_positions->begin() + index);
 
             // 5. ВАЖНО: В OCCT индексы в векторе должны совпадать с логикой C#
             // Так как мы используем erase, элементы после удаленного автоматически сдвинулись.
@@ -508,6 +559,8 @@ namespace Snake3DViewer
                     _aisContext()->Erase(seg, Standard_False);
             }
             _snakeSegments->clear();
+            _basePositions->clear();
+            _positions->clear();
             if (!_aisContext().IsNull())
                 _aisContext()->UpdateCurrentViewer();
         }
@@ -536,14 +589,17 @@ namespace Snake3DViewer
             Standard_Real minX, minY, minZ, maxX, maxY, maxZ;
             box.Get(minX, minY, minZ, maxX, maxY, maxZ);
 
-            double cx = (minX + maxX) * 0.5;
+            /*double cx = (minX + maxX) * 0.5;
             double cy = (minY + maxY) * 0.5;
-            double cz = (minZ + maxZ) * 0.5;
+            double cz = (minZ + maxZ) * 0.5;*/
+            double cx = (*_positions)[headIndex].X();
+            double cy = (*_positions)[headIndex].Y();
+            double cz = (*_positions)[headIndex].Z();
 
             // 2. Камера: позади по forward, выше по up, смотрит вперёд
-            double camBack = 4.0;
-            double camUp = 2.0;
-            double lookAhead = 6.0;
+            double camBack = 10.0;
+            double camUp = 3.0;
+            double lookAhead = 4.0;
 
             // Eye = голова - forward*camBack + up*camUp
             double desiredEyeX = cx - _dirX * camBack + _upX * camUp;
@@ -561,7 +617,7 @@ namespace Snake3DViewer
             gp_Pnt currentAt = cam->Center();
 
             // 4. Lerp — запаздывание камеры
-            double speed = 0.1;
+            double speed = 0.08;
 
             double newEyeX = currentEye.X() + (desiredEyeX - currentEye.X()) * speed;
             double newEyeY = currentEye.Y() + (desiredEyeY - currentEye.Y()) * speed;
@@ -578,6 +634,7 @@ namespace Snake3DViewer
 
             _view()->Redraw();
         }
+
 
     };
 }
