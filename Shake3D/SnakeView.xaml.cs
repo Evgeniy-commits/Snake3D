@@ -72,7 +72,7 @@ namespace Snake3D
 
                 // 7. События мыши/клавиатуры
                 PreviewKeyDown += SnakeView_PreviewKeyDown;
-                PreviewKeyDown += SnakeView_PreviewKeyUp;
+                //PreviewKeyDown += SnakeView_PreviewKeyUp;
                 PreviewMouseDown += SnakeView_PreviewMouseDown;
                 PreviewMouseMove += SnakeView_PreviewMouseMove;
                 PreviewMouseUp += SnakeView_PreviewMouseUp;
@@ -122,17 +122,17 @@ namespace Snake3D
                     break;                   
             }
         }
-        private void SnakeView_PreviewKeyUp(object sender, KeyEventArgs e)
-        {
-            if (_game == null) return;
+        //private void SnakeView_PreviewKeyUp(object sender, KeyEventArgs e)
+        //{
+        //    if (_game == null) return;
 
-            if (e.Key == Key.LeftShift || e.Key == Key.RightShift)
-            {
-                _game.SetShiftPressed(false);
-                _game.StopTurning();
-                return;
-            }
-        }
+        //    if (e.Key == Key.LeftShift || e.Key == Key.RightShift)
+        //    {
+        //        _game.SetShiftPressed(false);
+        //        _game.StopTurning();
+        //        return;
+        //    }
+        //}
 
         private void SnakeView_PreviewMouseDown(object sender, MouseButtonEventArgs e)
         {
