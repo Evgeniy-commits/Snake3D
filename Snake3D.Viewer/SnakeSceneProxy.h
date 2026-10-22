@@ -32,7 +32,6 @@
 #include <STEPControl_Reader.hxx>
 #include <IFSelect_ReturnStatus.hxx>
 #include <BRepBuilderAPI_Transform.hxx>
-#include <BRepBndLib.hxx>
 
 #include <msclr/marshal_cppstd.h>
 
@@ -99,6 +98,9 @@ namespace Snake3DViewer
 
         //Для STEP
         TopoDS_Shape* _headModel;
+
+        //Для камеры
+        int _viewMode = 0; // 0 = вид следования (дефолт), 1 = вид из кабины
 
     public:
         SnakeSceneProxy()
@@ -696,6 +698,18 @@ namespace Snake3DViewer
             if (ulen > 0.0) { _upX = ux / ulen; _upY = uy / ulen; _upZ = uz / ulen; }
         }
 
+        void ToggleViewMode()
+        {
+            _viewMode = (_viewMode == 0) ? 1 : 0;
+        }
+
+        void SetViewMode(int mode)
+        {
+            if (mode == 0 || mode == 1) _viewMode = mode;
+        }
+
+        bool IsCockpitView() { return _viewMode == 1; }
+
         void FollowHead(int headIndex)
         {
             if (headIndex < 0 || _snakeSegments == nullptr) return;
@@ -705,23 +719,36 @@ namespace Snake3DViewer
             Handle(AIS_Shape) headShape = (*_snakeSegments)[headIndex];
             if (headShape.IsNull()) return;
 
-            // 1. Центр головы
-            Bnd_Box box;
-            BRepBndLib::Add(headShape->Shape(), box);
-            Standard_Real minX, minY, minZ, maxX, maxY, maxZ;
-            box.Get(minX, minY, minZ, maxX, maxY, maxZ);
-
-            /*double cx = (minX + maxX) * 0.5;
-            double cy = (minY + maxY) * 0.5;
-            double cz = (minZ + maxZ) * 0.5;*/
             double cx = (*_positions)[headIndex].X();
             double cy = (*_positions)[headIndex].Y();
             double cz = (*_positions)[headIndex].Z();
 
-            // 2. Камера: позади по forward, выше по up, смотрит вперёд
-            double camBack = 10.0;
-            double camUp = 3.0;
-            double lookAhead = 4.0;
+            double camBack, camUp, lookAhead, fov, lerpSpeed;
+
+            if (_viewMode == 1)
+            {
+                // Кабина
+                camBack = 1.0;    // чуть позади центра головы — нос виден внизу экрана
+                camUp = 0.5;    // немного выше оси, видно "капот"
+                lookAhead = 30.0;   // далеко вперёд — хороший обзор арены
+                fov = 75.0;   // широкое поле зрения
+                lerpSpeed = 1.0;    // быстрый лерп, кабина не отстаёт от поворотов
+            }
+            else
+            {
+                // Дефолт
+                camBack = 10.0;
+                camUp = 3.0;
+                lookAhead = 4.0;
+                fov = 45.0;
+                lerpSpeed = 0.15;
+            }
+
+            // Геометрия камеры жёсткая: глаз на фиксированном отлёте и высоте,
+            // взгляд строго по курсу. Никакого лерпа — плавность даёт
+            // интерполяция позиций змейки на стороне C#.
+            Handle(Graphic3d_Camera) cam = _view()->Camera();
+            cam->SetFOVy(fov);
 
             // Eye = голова - forward*camBack + up*camUp
             double desiredEyeX = cx - _dirX * camBack + _upX * camUp;
@@ -734,29 +761,52 @@ namespace Snake3DViewer
             double desiredAtZ = cz + _dirZ * lookAhead;
 
             // 3. Текущие позиции
-            Handle(Graphic3d_Camera) cam = _view()->Camera();
+            //Handle(Graphic3d_Camera) cam = _view()->Camera();
             gp_Pnt currentEye = cam->Eye();
             gp_Pnt currentAt = cam->Center();
 
             // 4. Lerp — запаздывание камеры
-            double speed = 0.08;
+            //double speed = 0.08;
 
-            double newEyeX = currentEye.X() + (desiredEyeX - currentEye.X()) * speed;
-            double newEyeY = currentEye.Y() + (desiredEyeY - currentEye.Y()) * speed;
-            double newEyeZ = currentEye.Z() + (desiredEyeZ - currentEye.Z()) * speed;
+            double newEyeX = currentEye.X() + (desiredEyeX - currentEye.X()) * lerpSpeed;
+            double newEyeY = currentEye.Y() + (desiredEyeY - currentEye.Y()) * lerpSpeed;
+            double newEyeZ = currentEye.Z() + (desiredEyeZ - currentEye.Z()) * lerpSpeed;
 
-            double newAtX = currentAt.X() + (desiredAtX - currentAt.X()) * speed;
-            double newAtY = currentAt.Y() + (desiredAtY - currentAt.Y()) * speed;
-            double newAtZ = currentAt.Z() + (desiredAtZ - currentAt.Z()) * speed;
+            double newAtX = currentAt.X() + (desiredAtX - currentAt.X()) *lerpSpeed;
+            double newAtY = currentAt.Y() + (desiredAtY - currentAt.Y()) *lerpSpeed;
+            double newAtZ = currentAt.Z() + (desiredAtZ - currentAt.Z()) *lerpSpeed;
 
             // 5. Применение: позиция + вектор up (камера вращается с кораблём)
             cam->SetEye(gp_Pnt(newEyeX, newEyeY, newEyeZ));
-            cam->SetCenter(gp_Pnt(newAtX, newAtY, newAtZ));
+            cam->SetCenter(gp_Pnt(desiredAtX, desiredAtY, desiredAtZ));
             cam->SetUp(gp_Dir(_upX, _upY, _upZ));
 
             _view()->Redraw();
         }
 
+        // Проекция 3D-точки в пиксели вьюпорта.
+        // inFront = true, если точка перед камерой.
+        bool ProjectToScreen(double x, double y, double z,
+            int% sx, int% sy, bool% inFront)
+        {
+            inFront = false;
+            if (_view().IsNull()) return false;
 
+            Handle(Graphic3d_Camera) cam = _view()->Camera();
+            gp_Pnt eye = cam->Eye();
+            gp_Vec viewDir(eye, cam->Center());
+            gp_Vec toPoint(x - eye.X(), y - eye.Y(), z - eye.Z());
+
+            if (viewDir.Dot(toPoint) <= 0)
+                return true; // сзади — вызов валиден, но inFront=false
+
+            inFront = true;
+
+            Standard_Real px, py;
+            _view()->Project(x, y, z, px, py);
+            sx = (int)px;
+            sy = (int)py;   // origin — левый НИЖНИЙ угол; в WPF перевернём
+            return true;
+        }
     };
 }

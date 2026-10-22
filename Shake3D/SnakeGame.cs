@@ -72,16 +72,17 @@ namespace Snake3D
         public int Score        { get; private set; }
         public bool IsGameOver  { get; private set; }
         public bool IsRunning   { get; private set; }
+        public bool IsPaused { get; private set; }
 
         public event EventHandler<int>? ScoreChanged;
         public event EventHandler? GameOver;
 
         //Плавный поворот
-        private const double TurnSpeedRadPerSecond = 1.5 * Math.PI ; //90 градусов в секунду
+        private const double TurnSpeedRadPerSecond = Math.PI ; //90 градусов в секунду
         private double _yawRate = 0.0;
         private double _pitchRate = 0.0;
 
-        //private bool _isShiftPressed = false;
+        public bool TapTurnEnabled = false;
 
         // Если клавишу удерживают дольше этого времени — включается плавный поворот.
         // Быстрый тап (< порога) даёт дискретный поворот на 90° при отпускании.
@@ -92,6 +93,17 @@ namespace Snake3D
         private DateTime? _upPressTime;
         private DateTime? _downPressTime;
         private bool _smoothActive;
+
+        public const double LogicInterval = 0.07;
+
+        private readonly List<Point3D> _prevPositions = new();
+        private readonly List<Point3D> _nextPositions = new();
+        private Vector3D _prevForward, _nextForward;
+        private Vector3D _prevUp, _nextUp;
+        private DateTime _lastLogicTick = DateTime.UtcNow;
+        private double _logicAccumulator = 0;
+
+        public Point3D CrystalPos => _crystalPos;
 
         public SnakeGame(SnakeSceneProxy proxy, double arenaSize, double segmentRadius, double foodRadius)
         {
@@ -118,6 +130,28 @@ namespace Snake3D
             IsGameOver = false;
         }
 
+        public void TogglePause()
+        {
+            if (IsGameOver || !IsRunning) return;
+            IsPaused = !IsPaused;
+
+            if (IsPaused)
+            {
+                // на паузе сбрасываем зажатые клавиши,
+                // чтобы после снятия змейка не сорвалась в плавный поворот
+                StopTurning();
+                _leftPressTime = null;
+                _rightPressTime = null;
+                _upPressTime = null;
+                _downPressTime = null;
+            }
+            else
+            {
+                // чтобы после паузы не было скачка интерполяции
+                _lastLogicTick = DateTime.UtcNow;
+            }
+        }
+
         public void Reset()
         {
             _proxy.RemoveAllSnake();
@@ -141,10 +175,19 @@ namespace Snake3D
             _rightPressTime = null;
             _upPressTime = null;
             _downPressTime = null;
-            
+
+            _prevPositions.Clear();
+            foreach (var s in _segments) _prevPositions.Add(s);
+            _nextPositions.Clear();
+            foreach (var s in _segments) _nextPositions.Add(s);
+            _prevForward = _forward; _nextForward = _forward;
+            _prevUp = _up; _nextUp = _up;
+            _lastLogicTick = DateTime.UtcNow;
+
             SpawnCrystal();
             Score = 0;
             ScoreChanged?.Invoke(this, Score);
+            _proxy.SetViewMode(0);
             _proxy.Redraw();
         }
 
@@ -186,8 +229,8 @@ namespace Snake3D
                 }
             }
             else 
-            { 
-                _pendingTurn = dir; 
+            {
+                if (TapTurnEnabled) _pendingTurn = dir;
             }
 
         }
@@ -199,38 +242,18 @@ namespace Snake3D
             _smoothActive = false;
         }
 
-        //public void SetShiftPressed(bool pressed)
-        //{
-        //    _isShiftPressed = pressed;
-        //}
-        //public void TurnLeft() 
-        //{
-        //    if (_isShiftPressed) _yawRate = TurnSpeedRadPerSecond;
-        //    else _pendingTurn = 1;           
-        //}
-        //public void TurnRight() 
-        //{
-        //    if (_isShiftPressed) _yawRate = -TurnSpeedRadPerSecond;
-        //    else _pendingTurn = 2;            
-        //}
-        //public void TurnUp() 
-        //{
-        //    if (_isShiftPressed) _pitchRate = TurnSpeedRadPerSecond;
-        //    else _pendingTurn = 3;
-        //}
-        //public void TurnDown() 
-        //{
-        //    if (_isShiftPressed) _pitchRate = -TurnSpeedRadPerSecond;
-        //    else _pendingTurn = 4;
-        //}
-
-        
         public void Update()
         {
-            if (!IsRunning || IsGameOver) return;
+            if (!IsRunning || IsGameOver || IsPaused) return;
             if (_segments.Count == 0) { TriggerGameOver(); return; }
 
-            double dt = 0.1; //интервал таймера
+            // состояние ДО тика — для интерполяции
+            _prevPositions.Clear();
+            foreach (var s in _segments) _prevPositions.Add(s);
+            _prevForward = _forward;
+            _prevUp = _up;
+
+            double dt = LogicInterval;
 
             UpdateSmoothTurn();
 
@@ -287,7 +310,8 @@ namespace Snake3D
             if (distToCrystal <= combinedRadius + tolerance)
             {
                 Score += 10;
-                ateFood = true;        // ← просто ставим флаг
+                ateFood = true;
+                ScoreChanged?.Invoke(this, Score); 
                 SpawnCrystal();
             }
 
@@ -317,19 +341,101 @@ namespace Snake3D
             if (_segments.Count > 5)
             {
                 var head = _segments[0];
+                double crashRadius = _step * 0.6;  
                 for (int i = 4; i < _segments.Count; i++)
                 {
-                    if (Distance(head, _segments[i]) < 0.1)
+                    if (Distance(head, _segments[i]) < crashRadius)
                     {
                         TriggerGameOver();
                         return;
                     }
                 }
             }
-
+                        
             //камера
-            _proxy.FollowHead(0);  
+            //_proxy.FollowHead(0);
             //_proxy.Redraw();
+
+            // состояние ПОСЛЕ тика
+            _nextPositions.Clear();
+            foreach (var s in _segments) _nextPositions.Add(s);
+
+            //нормализация, чтобы модель не дергалась
+            double fl = Math.Sqrt(_forward.X * _forward.X + _forward.Y * _forward.Y + _forward.Z * _forward.Z);
+            if (fl > 1e-9) _forward = new Vector3D(_forward.X / fl, _forward.Y / fl, _forward.Z / fl);
+
+            double ud = _up.X * _forward.X + _up.Y * _forward.Y + _up.Z * _forward.Z;
+            _up = new Vector3D(_up.X - ud * _forward.X, _up.Y - ud * _forward.Y, _up.Z - ud * _forward.Z);
+            double ul = Math.Sqrt(_up.X * _up.X + _up.Y * _up.Y + _up.Z * _up.Z);
+            if (ul > 1e-9) _up = new Vector3D(_up.X / ul, _up.Y / ul, _up.Z / ul);
+
+            _nextForward = _forward;
+            _nextUp = _up;
+            _lastLogicTick = DateTime.UtcNow;
+        }
+        public void Frame(double dt)
+        {
+            if (IsRunning && !IsGameOver && !IsPaused)
+            {
+                _logicAccumulator += dt;
+
+                // защита от "догоняющего" шквала после зависания/свёртывания окна
+                if (_logicAccumulator > LogicInterval * 4)
+                    _logicAccumulator = LogicInterval;
+
+                while (_logicAccumulator >= LogicInterval)
+                {
+                    Update();
+                    _logicAccumulator -= LogicInterval;
+                }
+            }
+
+            Render();
+        }
+
+        // Вызывается часто (30 Гц): плавно тянет visuals от прошлого тика к новому
+        public void Render()
+        {
+            if (_segments.Count == 0) return;
+
+            double alpha = (DateTime.UtcNow - _lastLogicTick).TotalSeconds / LogicInterval;
+            if (alpha < 0) alpha = 0;
+            if (alpha > 1) alpha = 1;
+
+            double fx = _prevForward.X + (_nextForward.X - _prevForward.X) * alpha;
+            double fy = _prevForward.Y + (_nextForward.Y - _prevForward.Y) * alpha;
+            double fz = _prevForward.Z + (_nextForward.Z - _prevForward.Z) * alpha;
+            double ux = _prevUp.X + (_nextUp.X - _prevUp.X) * alpha;
+            double uy = _prevUp.Y + (_nextUp.Y - _prevUp.Y) * alpha;
+            double uz = _prevUp.Z + (_nextUp.Z - _prevUp.Z) * alpha;
+
+            // 1. Нормализуем forward
+            double flen = Math.Sqrt(fx * fx + fy * fy + fz * fz);
+            if (flen > 1e-9) { fx /= flen; fy /= flen; fz /= flen; }
+
+            // 2. Ортогонализуем up: убираем компоненту вдоль forward
+            double dot = ux * fx + uy * fy + uz * fz;
+            ux -= dot * fx; uy -= dot * fy; uz -= dot * fz;
+
+            // 3. Нормализуем up
+            double ulen = Math.Sqrt(ux * ux + uy * uy + uz * uz);
+            if (ulen > 1e-9) { ux /= ulen; uy /= ulen; uz /= ulen; }
+
+            _proxy.SetOrientation(fx, fy, fz, ux, uy, uz);
+
+            for (int i = 0; i < _nextPositions.Count; i++)
+            {
+                Point3D prev = i < _prevPositions.Count ? _prevPositions[i] : _nextPositions[i];
+                Point3D next = _nextPositions[i];
+
+                double x = prev.X + (next.X - prev.X) * alpha;
+                double y = prev.Y + (next.Y - prev.Y) * alpha;
+                double z = prev.Z + (next.Z - prev.Z) * alpha;
+
+                if (i == 0) _proxy.MoveHead(0, x, y, z);
+                else _proxy.MoveSegment(i, x, y, z);
+            }       
+            _proxy.FollowHead(0);
         }
 
         private void UpdateSmoothTurn()
