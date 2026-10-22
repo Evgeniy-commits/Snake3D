@@ -91,7 +91,7 @@ namespace Snake3DViewer
         std::vector<Handle(AIS_Shape)>* _walls;
         std::vector<gp_Pnt>* _basePositions;
         std::vector<gp_Pnt>* _positions;
-
+        std::vector<Handle(AIS_Shape)>* _crystals;
 
         double _dirX, _dirY, _dirZ;
         double _upX, _upY, _upZ;
@@ -114,6 +114,7 @@ namespace Snake3DViewer
             _walls = new std::vector<Handle(AIS_Shape)>();
             _basePositions = new std::vector<gp_Pnt>();
             _positions = new std::vector<gp_Pnt>();
+            _crystals = new std::vector<Handle(AIS_Shape)>();
 
             _dirX = 0.0;  _dirY = 1.0;  _dirZ = 0.0;
             _upX = 0.0;   _upY = 0.0;   _upZ = 1.0;
@@ -132,6 +133,9 @@ namespace Snake3DViewer
 
             delete _headModel; 
             _headModel = nullptr;
+
+            delete _crystals;
+            _crystals = nullptr;
         }
 
         !SnakeSceneProxy()
@@ -145,6 +149,9 @@ namespace Snake3DViewer
 
             delete _headModel; 
             _headModel = nullptr;
+
+            delete _crystals;
+            _crystals = nullptr;
         }
 
         bool LoadHeadModel(System::String^ path, double targetRadius)
@@ -266,6 +273,7 @@ namespace Snake3DViewer
         {
             if (!_aisContext().IsNull())
                 _aisContext()->EraseAll(Standard_False);
+            _crystals->clear();
             _snakeSegments->clear();
             _walls->clear();
             _basePositions->clear();
@@ -274,60 +282,6 @@ namespace Snake3DViewer
             if (!_aisContext().IsNull())
                 _aisContext()->UpdateCurrentViewer();
         }
-
-        //void AddSegment(double x, double y, double z, double radius, int index)
-        //{
-        //    gp_Pnt center(x, y, z);
-        //    Handle(AIS_Shape) aisShape;
-
-        //    if (index == 0)
-        //    {
-        //        // Голова — серебристая капсула (космолет)
-        //        gp_Ax2 ax2(gp_Pnt(center.X(), center.Y() - radius, center.Z()), gp_Dir(0, 1, 0));
-        //        TopoDS_Shape cylinder = BRepPrimAPI_MakeCylinder(ax2, radius, radius * 2).Shape();
-        //        TopoDS_Shape sphere1 = BRepPrimAPI_MakeSphere(gp_Pnt(center.X(), center.Y() + radius, center.Z()), radius).Shape();
-        //        TopoDS_Shape sphere2 = BRepPrimAPI_MakeSphere(gp_Pnt(center.X(), center.Y() - radius, center.Z()), radius).Shape();
-
-        //        //  попарно, без Add()
-        //        BRepAlgoAPI_Fuse fuse1(cylinder, sphere1);
-        //        fuse1.Build();
-        //        if (!fuse1.IsDone())
-        //        {
-        //            BRepPrimAPI_MakeSphere fallback(center, radius);
-        //            aisShape = new AIS_Shape(fallback.Shape());
-        //            aisShape->SetColor(Quantity_Color(Quantity_NOC_RED));
-        //        }
-        //        else
-        //        {
-        //            BRepAlgoAPI_Fuse fuse2(fuse1.Shape(), sphere2);
-        //            fuse2.Build();
-        //            if (fuse2.IsDone())
-        //            {
-        //                aisShape = new AIS_Shape(fuse2.Shape());
-        //            }
-        //            else
-        //            {
-        //                aisShape = new AIS_Shape(fuse1.Shape());
-        //            }
-        //            // Серебристый цвет через RGB (0.75, 0.75, 0.75)
-        //            aisShape->SetColor(Quantity_Color(0.75, 0.75, 0.75, Quantity_TOC_RGB));
-        //        }
-        //    }
-        //    else
-        //    {
-        //        // Тело — синие сферы
-        //        BRepPrimAPI_MakeSphere sphere(center, radius);
-        //        aisShape = new AIS_Shape(sphere.Shape());
-        //        aisShape->SetColor(Quantity_Color(Quantity_NOC_BLUE));
-        //    }
-
-        //    aisShape->SetDisplayMode(1);
-        //    _snakeSegments->push_back(aisShape);
-        //    _basePositions->push_back(center);
-        //    _positions->push_back(center);
-        //    _aisContext()->Display(aisShape, Standard_True);
-        //}
-
 
         void AddSegment(double x, double y, double z, double radius, int index)
         {
@@ -532,6 +486,38 @@ namespace Snake3DViewer
 
             _aisContext()->Display(aisShape, Standard_True);
             _foodShape() = aisShape;
+        }
+
+        void ClearCrystals()
+        {
+            for (auto& c : *_crystals)
+                if (!c.IsNull() && !_aisContext().IsNull())
+                    _aisContext()->Erase(c, Standard_False);
+            _crystals->clear();
+        }
+
+        void AddCrystalAt(int index, double x, double y, double z, double radius)
+        {
+            gp_Pnt center(x, y, z);
+            BRepPrimAPI_MakeSphere sphere(center, radius);
+
+            Handle(AIS_Shape) aisShape = new AIS_Shape(sphere.Shape());
+            aisShape->SetDisplayMode(1);
+            aisShape->SetColor(Quantity_Color(Quantity_NOC_CYAN));
+
+            if (index >= static_cast<int>(_crystals->size()))
+                _crystals->resize(index + 1);
+            (*_crystals)[index] = aisShape;
+
+            _aisContext()->Display(aisShape, Standard_True);
+        }
+
+        void RemoveCrystalAt(int index)
+        {
+            if (index < 0 || index >= static_cast<int>(_crystals->size())) return;
+            if (!(*_crystals)[index].IsNull() && !_aisContext().IsNull())
+                _aisContext()->Erase((*_crystals)[index], Standard_False);
+            _crystals->erase(_crystals->begin() + index);
         }
 
         void AddGridLine(const gp_Pnt& p1, const gp_Pnt& p2, Quantity_NameOfColor baseColor)

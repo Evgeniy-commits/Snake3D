@@ -11,6 +11,7 @@ namespace Snake3D
         private readonly Canvas _canvas = new();
         private readonly Path? _crosshair;
         private readonly Ellipse? _crystalDot;
+        private readonly List<Ellipse> _crystalDots = new();
 
         public HudOverlay()
         {
@@ -71,6 +72,41 @@ namespace Snake3D
             _crystalDot!.Visibility = Visibility.Visible;
             Canvas.SetLeft(_crystalDot, x.Value - _crystalDot.Width / 2);
             Canvas.SetTop(_crystalDot, y - _crystalDot.Height / 2);
+        }
+
+        public void UpdateCrystalMarkers(IReadOnlyList<double?> xs, IReadOnlyList<double> ys)
+        {
+            while (_crystalDots.Count < xs.Count)
+            {
+                var dot = new Ellipse
+                {
+                    Width = 16,
+                    Height = 16,
+                    Stroke = System.Windows.Media.Brushes.Orange,
+                    StrokeThickness = 2,
+                    Visibility = Visibility.Collapsed
+                };
+                _canvas.Children.Add(dot);
+                _crystalDots.Add(dot);
+            }
+
+            while (_crystalDots.Count > xs.Count)
+            {
+                _canvas.Children.Remove(_crystalDots[_crystalDots.Count - 1]);
+                _crystalDots.RemoveAt(_crystalDots.Count - 1);
+            }
+
+            for (int i = 0; i < xs.Count; i++)
+            {
+                if (xs[i] == null)
+                {
+                    _crystalDots[i].Visibility = Visibility.Collapsed;
+                    continue;
+                }
+                _crystalDots[i].Visibility = Visibility.Visible;
+                Canvas.SetLeft(_crystalDots[i], xs[i].Value - _crystalDots[i].Width / 2);
+                Canvas.SetTop(_crystalDots[i], ys[i] - _crystalDots[i].Height / 2);
+            }
         }
     }
 }

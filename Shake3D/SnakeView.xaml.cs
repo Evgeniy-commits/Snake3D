@@ -234,18 +234,32 @@ namespace Snake3D
                 return;
             }
 
-            var c = _game!.CrystalPos;
-            int sx = 0, sy = 0;
-            bool inFront = false;
-            bool ok = _viewport!.Proxy!.ProjectToScreen(c.X, c.Y, c.Z, ref sx, ref sy, ref inFront);
+            var crystals = _game.Crystals;
+            var xs = new List<double?>();
+            var ys = new List<double>();
 
             double w = ViewportHost.ActualWidth;
             double h = ViewportHost.ActualHeight;
 
-            if (ok && inFront && sx >= 0 && sx <= w && sy >= 0 && sy <= h)
-                _hud.PlaceCrystal(sx, h - sy);
-            else
-                _hud.PlaceCrystal(null, 0);
+            foreach (var c in crystals)
+            {
+                int sx = 0, sy = 0;
+                bool inFront = false;
+                bool ok = _viewport.Proxy.ProjectToScreen(c.X, c.Y, c.Z, ref sx, ref sy, ref inFront);
+
+                if (ok && inFront && sx >= 0 && sx <= w && sy >= 0 && sy <= h)
+                {
+                    xs.Add(sx);
+                    ys.Add(h - sy);   // из нижней системы координат в верхнюю
+                }
+                else
+                {
+                    xs.Add(null);
+                    ys.Add(0);
+                }
+            }
+
+            _hud.UpdateCrystalMarkers(xs, ys);
         }
 
         private void UpdateHudPlacement()
