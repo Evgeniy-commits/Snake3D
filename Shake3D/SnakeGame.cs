@@ -77,12 +77,22 @@ namespace Snake3D
         public event EventHandler? GameOver;
 
         //Плавный поворот
-        private const double TurnSpeedRadPerSecond = Math.PI ; //90 градусов в секунду
+        private const double TurnSpeedRadPerSecond = 1.5 * Math.PI ; //90 градусов в секунду
         private double _yawRate = 0.0;
         private double _pitchRate = 0.0;
 
-        private bool _isShiftPressed = false;
-        
+        //private bool _isShiftPressed = false;
+
+        // Если клавишу удерживают дольше этого времени — включается плавный поворот.
+        // Быстрый тап (< порога) даёт дискретный поворот на 90° при отпускании.
+        private static readonly TimeSpan HoldThreshold = TimeSpan.FromMilliseconds(200);
+
+        private DateTime? _leftPressTime;
+        private DateTime? _rightPressTime;
+        private DateTime? _upPressTime;
+        private DateTime? _downPressTime;
+        private bool _smoothActive;
+
         public SnakeGame(SnakeSceneProxy proxy, double arenaSize, double segmentRadius, double foodRadius)
         {
             _proxy = proxy;
@@ -126,49 +136,103 @@ namespace Snake3D
             _pendingTurn = 0;
             _yawRate = 0.0;
             _pitchRate = 0.0;
+            _smoothActive = false;
+            _leftPressTime = null;
+            _rightPressTime = null;
+            _upPressTime = null;
+            _downPressTime = null;
+            
             SpawnCrystal();
             Score = 0;
             ScoreChanged?.Invoke(this, Score);
             _proxy.Redraw();
         }
 
-        public void SetShiftPressed(bool pressed)
+        // Вызывается из View при КАЖДОМ KeyDown (в том числе при автоповторе WPF).
+        // Время нажатия ставим только один раз — иначе автоповтор сбросит таймер
+        // и плавный поворот никогда не включится.
+        public void StartTurn(int dir) // 1=лево, 2=право, 3=вверх, 4=вниз
         {
-            _isShiftPressed = pressed;
+            DateTime now = DateTime.UtcNow;
+            switch (dir)
+            {
+                case 1: if (_leftPressTime == null) _leftPressTime = now; break;
+                case 2: if (_rightPressTime == null) _rightPressTime = now; break;
+                case 3: if (_upPressTime == null) _upPressTime = now; break;
+                case 4: if (_downPressTime == null) _downPressTime = now; break;
+            }
         }
-        public void TurnLeft() 
+
+        // Вызывается из View при KeyUp.
+        public void ReleaseTurn(int dir)
         {
-            if (_isShiftPressed) _yawRate = TurnSpeedRadPerSecond;
-            else _pendingTurn = 1;           
-        }
-        public void TurnRight() 
-        {
-            if (_isShiftPressed) _yawRate = -TurnSpeedRadPerSecond;
-            else _pendingTurn = 2;            
-        }
-        public void TurnUp() 
-        {
-            if (_isShiftPressed) _pitchRate = TurnSpeedRadPerSecond;
-            else _pendingTurn = 3;
-        }
-        public void TurnDown() 
-        {
-            if (_isShiftPressed) _pitchRate = -TurnSpeedRadPerSecond;
-            else _pendingTurn = 4;
+            //!!!!СНАЧАЛА очищаем время нажатия отпущенной клавиши
+            switch (dir)
+            {
+                case 1: _leftPressTime = null; break;
+                case 2: _rightPressTime = null; break;
+                case 3: _upPressTime = null; break;
+                case 4: _downPressTime = null; break;
+            }
+
+            if (_smoothActive)
+            {
+                //отпустили клавишу во время плавного поворота.
+                //стоп - когда нет зажатых клавиш
+                if (_leftPressTime == null && _rightPressTime == null &&
+                    _upPressTime == null && _downPressTime == null)
+                { 
+                    StopTurning(); 
+                }
+            }
+            else 
+            { 
+                _pendingTurn = dir; 
+            }
+
         }
 
         public void StopTurning()
         {
             _yawRate = 0.0;
             _pitchRate = 0.0;
+            _smoothActive = false;
         }
 
+        //public void SetShiftPressed(bool pressed)
+        //{
+        //    _isShiftPressed = pressed;
+        //}
+        //public void TurnLeft() 
+        //{
+        //    if (_isShiftPressed) _yawRate = TurnSpeedRadPerSecond;
+        //    else _pendingTurn = 1;           
+        //}
+        //public void TurnRight() 
+        //{
+        //    if (_isShiftPressed) _yawRate = -TurnSpeedRadPerSecond;
+        //    else _pendingTurn = 2;            
+        //}
+        //public void TurnUp() 
+        //{
+        //    if (_isShiftPressed) _pitchRate = TurnSpeedRadPerSecond;
+        //    else _pendingTurn = 3;
+        //}
+        //public void TurnDown() 
+        //{
+        //    if (_isShiftPressed) _pitchRate = -TurnSpeedRadPerSecond;
+        //    else _pendingTurn = 4;
+        //}
+
+        
         public void Update()
         {
             if (!IsRunning || IsGameOver) return;
             if (_segments.Count == 0) { TriggerGameOver(); return; }
 
             double dt = 0.1; //интервал таймера
+
+            UpdateSmoothTurn();
 
             //палавный поворот(если есть скорость)
             if (_yawRate != 0) RotateYawContinuos(_yawRate * dt); 
@@ -266,6 +330,36 @@ namespace Snake3D
             //камера
             _proxy.FollowHead(0);  
             //_proxy.Redraw();
+        }
+
+        private void UpdateSmoothTurn()
+        {
+            DateTime now = DateTime.UtcNow;
+
+            // Плавный поворот уже идёт — продолжаем, пока есть зажатая клавиша
+            if (_smoothActive) return;
+
+            // Проверяем, не удерживается ли какая-то клавиша дольше порога
+            if (_leftPressTime.HasValue && now - _leftPressTime.Value > HoldThreshold)
+            {
+                _yawRate = TurnSpeedRadPerSecond;
+                _smoothActive = true;
+            }
+            else if (_rightPressTime.HasValue && now - _rightPressTime.Value > HoldThreshold)
+            {
+                _yawRate = -TurnSpeedRadPerSecond;
+                _smoothActive = true;
+            }
+            else if (_upPressTime.HasValue && now - _upPressTime.Value > HoldThreshold)
+            {
+                _pitchRate = TurnSpeedRadPerSecond;
+                _smoothActive = true;
+            }
+            else if (_downPressTime.HasValue && now - _downPressTime.Value > HoldThreshold)
+            {
+                _pitchRate = -TurnSpeedRadPerSecond;
+                _smoothActive = true;
+            }
         }
 
         private void SpawnCrystal()

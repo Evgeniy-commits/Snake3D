@@ -27,12 +27,12 @@ namespace Snake3D
 
         public SnakeView()
         {
-            MessageBox.Show("A. До InitializeComponent");
+            //MessageBox.Show("A. До InitializeComponent");
             InitializeComponent();
-            MessageBox.Show("B. После InitializeComponent");
+            //MessageBox.Show("B. После InitializeComponent");
             Loaded += SnakeView_Loaded;
             Unloaded += SnakeView_Unloaded;
-            MessageBox.Show("C. После подписки на события");
+            //MessageBox.Show("C. После подписки на события");
         }
         
         private void SnakeView_Loaded(object sender, RoutedEventArgs e)
@@ -72,7 +72,7 @@ namespace Snake3D
 
                 // 7. События мыши/клавиатуры
                 PreviewKeyDown += SnakeView_PreviewKeyDown;
-                //PreviewKeyDown += SnakeView_PreviewKeyUp;
+                PreviewKeyUp += SnakeView_PreviewKeyUp;
                 PreviewMouseDown += SnakeView_PreviewMouseDown;
                 PreviewMouseMove += SnakeView_PreviewMouseMove;
                 PreviewMouseUp += SnakeView_PreviewMouseUp;
@@ -83,56 +83,38 @@ namespace Snake3D
                 MessageBox.Show(ex.ToString(), "Ошибка в Loaded");
             }
         }
-
-
-       
         private void SnakeView_PreviewKeyDown(object sender, KeyEventArgs e)
         {
             if (_game == null) return;
 
-            if (e.Key == Key.LeftShift || e.Key == Key.RightShift)
-            {
-                _game.SetShiftPressed(true);
-            }
-
             switch (e.Key)
             {
-                case Key.Space:                                        
+                case Key.Space:
                     if (_game.IsGameOver || !_game.IsRunning)
                     {
                         _game.Start();
                         StatusText.Text = "Идёт игра!";
                     }
                     break;
-                case Key.A:                                           
-                case Key.Left:
-                    _game.TurnLeft();        // было SetDirection(-1,0,0)
-                    break;
-                case Key.D:
-                case Key.Right:
-                    _game.TurnRight();       // было SetDirection(1,0,0)
-                    break;
-                case Key.W:
-                case Key.Up:
-                    _game.TurnUp();          // было SetDirection(0,1,0)
-                    break;
-                case Key.S:
-                case Key.Down:
-                    _game.TurnDown();        // было SetDirection(0,-1,0)
-                    break;                   
+                case Key.A: case Key.Left: _game.StartTurn(1); break;
+                case Key.D: case Key.Right: _game.StartTurn(2); break;
+                case Key.W: case Key.Up: _game.StartTurn(3); break;
+                case Key.S: case Key.Down: _game.StartTurn(4); break;
             }
         }
-        //private void SnakeView_PreviewKeyUp(object sender, KeyEventArgs e)
-        //{
-        //    if (_game == null) return;
 
-        //    if (e.Key == Key.LeftShift || e.Key == Key.RightShift)
-        //    {
-        //        _game.SetShiftPressed(false);
-        //        _game.StopTurning();
-        //        return;
-        //    }
-        //}
+        private void SnakeView_PreviewKeyUp(object sender, KeyEventArgs e)
+        {
+            if (_game == null) return;
+
+            switch (e.Key)
+            {
+                case Key.A: case Key.Left: _game.ReleaseTurn(1); break;
+                case Key.D: case Key.Right: _game.ReleaseTurn(2); break;
+                case Key.W: case Key.Up: _game.ReleaseTurn(3); break;
+                case Key.S: case Key.Down: _game.ReleaseTurn(4); break;
+            }
+        }
 
         private void SnakeView_PreviewMouseDown(object sender, MouseButtonEventArgs e)
         {
