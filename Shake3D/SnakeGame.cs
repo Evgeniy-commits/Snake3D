@@ -54,21 +54,27 @@ namespace Snake3D
     {
         private readonly SnakeSceneProxy _proxy;
         private List<Point3D> _segments;
-        //private Point3D _food;
-        //private Point3D _crystalPos;
+       
+        //кристаллы
         private readonly List<Point3D> _crystals = new();
-        public const int CrystalCount = 5;
+        public const int CrystalCount = 50;
         public IReadOnlyList<Point3D> Crystals => _crystals;
+
+        //мины
+        private readonly List<Point3D> _mines = new();
+        public const int MineCount = 25;
+        public const int MineScore = 50;
+        public IReadOnlyList<Point3D> Mines => _mines;  
 
         private Vector3D _forward;   // куда летим
         private Vector3D _up;        // где верх
 
         private int _pendingTurn = 0;  // 0=нет, 1=лево, 2=право, 3=вверх, 4=вниз
 
-        private double _segmentRadius = 0.4;
+        private double _segmentRadius = 0.5;
         private double _step = 1.0;
-        private double _foodRadius = 0.4;
-        private double _arenaSize = 50.0;
+        private double _foodRadius = 0.5;
+        private double _arenaSize = 100.0;
         private Random _rand = new Random();
 
         public int Score { get; private set; }
@@ -96,7 +102,7 @@ namespace Snake3D
         private DateTime? _downPressTime;
         private bool _smoothActive;
 
-        public const double LogicInterval = 0.07;
+        public const double LogicInterval = 0.05;
 
         private readonly List<Point3D> _prevPositions = new();
         private readonly List<Point3D> _nextPositions = new();
@@ -123,6 +129,15 @@ namespace Snake3D
                 // но полезно знать об этом сразу
                 System.Diagnostics.Debug.WriteLine("Не удалось загрузить модель головы, будет fallback-капсула");
             }
+
+            string modelsDir = @"C:\Users\Admin\source\repos\Shake3D\models\";
+            // Загрузка моделей хвоста, кристалла и мины — один раз, до первого Reset()
+
+            bool tailOk = _proxy.LoadStepModel(System.IO.Path.Combine(modelsDir, "Tail.stp"), 1, 1.0);
+            bool crystalOk = _proxy.LoadStepModel(System.IO.Path.Combine(modelsDir, "Crystall.stp"), 2, 3.0);
+            bool mineOk = _proxy.LoadStepModel(System.IO.Path.Combine(modelsDir, "Mine.stp"), 4, 1.5);
+
+            System.Diagnostics.Debug.WriteLine($"Модели: tail={tailOk} crystal={crystalOk} mine={mineOk}");
         }
 
         public void Start()
@@ -186,10 +201,15 @@ namespace Snake3D
             _prevUp = _up; _nextUp = _up;
             _lastLogicTick = DateTime.UtcNow;
 
-            SpawnCrystal();
+           
             _proxy.ClearCrystals();
             _crystals.Clear();
             EnsureCrystals();
+
+            _proxy.ClearMines();
+            _mines.Clear();
+            EnsureMines();
+
             Score = 0;
             ScoreChanged?.Invoke(this, Score);
             _proxy.SetViewMode(0);
@@ -209,8 +229,19 @@ namespace Snake3D
                 case 3: if (_upPressTime == null) _upPressTime = now; break;
                 case 4: if (_downPressTime == null) _downPressTime = now; break;
             }
+            
+            if (!TapTurnEnabled)
+            {
+                // плавный режим: реагируем сразу, без порога удержания
+                _smoothActive = true;
+                ApplyHeldDirections();
+            }
+            else if (_smoothActive)
+            {
+                ApplyHeldDirections();
+            }
         }
-
+        
         // Вызывается из View при KeyUp.
         public void ReleaseTurn(int dir)
         {
@@ -223,19 +254,25 @@ namespace Snake3D
                 case 4: _downPressTime = null; break;
             }
 
+            //if (_smoothActive)
+            //{
+            //    //отпустили клавишу во время плавного поворота.
+            //    //стоп - когда нет зажатых клавиш
+            //    if (_leftPressTime == null && _rightPressTime == null &&
+            //        _upPressTime == null && _downPressTime == null)
+            //    {
+            //        StopTurning();
+            //    }
+            //}
+
             if (_smoothActive)
             {
-                //отпустили клавишу во время плавного поворота.
-                //стоп - когда нет зажатых клавиш
-                if (_leftPressTime == null && _rightPressTime == null &&
-                    _upPressTime == null && _downPressTime == null)
-                {
-                    StopTurning();
-                }
+                ApplyHeldDirections();
+                if (_yawRate == 0 && _pitchRate == 0) StopTurning();
             }
-            else
+            else if (TapTurnEnabled)
             {
-                if (TapTurnEnabled) _pendingTurn = dir;
+                _pendingTurn = dir;
             }
 
         }
@@ -263,15 +300,8 @@ namespace Snake3D
             UpdateSmoothTurn();
 
             //палавный поворот(если есть скорость)
-            if (_yawRate != 0) RotateYawContinuos(_yawRate * dt);
-            if (_pitchRate != 0) RotatePitchContinuos(_pitchRate * dt);
-
-            //_proxy.SetOrientation(
-            //    _forward.X, _forward.Y, _forward.Z,
-            //    _up.X, _up.Y, _up.Z);
-
-            //Point3D newHead = _segments[0] + _forward * _step;
-
+            //if (_yawRate != 0) RotateYawContinuos(_yawRate * dt);
+            //if (_pitchRate != 0) RotatePitchContinuos(_pitchRate * dt);
 
             // применяем один поворот на 90°, если был запрос
             switch (_pendingTurn)
@@ -282,11 +312,6 @@ namespace Snake3D
                 case 4: RotatePitch(-1); break;  // вниз
             }
             _pendingTurn = 0;
-
-            // передаём ориентацию в C++ для камеры
-            //_proxy.SetOrientation(
-            //    _forward.X, _forward.Y, _forward.Z,
-            //    _up.X, _up.Y, _up.Z);
 
             //было _direction, теперь _forward
             Point3D newHead = _segments[0] + _forward * _step;
@@ -299,9 +324,6 @@ namespace Snake3D
                 TriggerGameOver();
                 return;
             }
-
-            //еда
-            //double distToCrystal = Distance(newHead, _crystalPos);
 
             // Сумма радиусов: голова космолета + кристалл
             double combinedRadius = _segmentRadius + _foodRadius;
@@ -326,21 +348,38 @@ namespace Snake3D
                     break;
                 }
             }
+
+            for (int i = 0; i < _mines.Count; i++)
+            {
+                if (Distance(newHead, _mines[i]) <= _segmentRadius + _foodRadius + tolerance)
+                {
+                    Score -= MineScore;
+                    ScoreChanged?.Invoke(this, Score);
+
+                    _proxy.RemoveMineAt(i);
+                    _mines.RemoveAt(i);
+
+                    if (Score < 0)
+                    {
+                        TriggerGameOver();
+                        return;
+                    }
+
+                    EnsureMines(); //восстанавливаем мины
+                    break;
+                }
+            }
+
             // запоминаем хвост до сдвига
             Point3D oldTail = _segments[_segments.Count - 1];
 
             //сдвиг тела
-            //Point3D oldTail = _segments[_segments.Count - 1];
             for (int i = _segments.Count - 1; i > 0; i--)
             {
-                _segments[i] = _segments[i - 1];
-                _proxy.MoveSegment(i, _segments[i].X, _segments[i].Y, _segments[i].Z);
+                _segments[i] = _segments[i - 1];                
             }
             _segments[0] = newHead;
-            //_proxy.SetOrientation(_forward.X, _forward.Y, _forward.Z, _up.X, _up.Y, _up.Z);
-            //_proxy.MoveSegment(0, newHead.X, newHead.Y, newHead.Z);
-            //_proxy.MoveHead(0, newHead.X, newHead.Y, newHead.Z);
-
+            
             //рост
             if (ateFood)
             {
@@ -389,9 +428,18 @@ namespace Snake3D
         {
             if (IsRunning && !IsGameOver && !IsPaused)
             {
-                _logicAccumulator += dt;
+                // плавный поворот — каждый кадр, мгновенный отклик
+                if (_yawRate != 0 || _pitchRate != 0)
+                {
+                    _prevForward = _forward;
+                    _prevUp = _up;
+                    if (_yawRate != 0) RotateYawContinuos(_yawRate * dt);
+                    if (_pitchRate != 0) RotatePitchContinuos(_pitchRate * dt);
+                    _nextForward = _forward;
+                    _nextUp = _up;
+                }
 
-                // защита от "догоняющего" шквала после зависания/свёртывания окна
+                _logicAccumulator += dt;
                 if (_logicAccumulator > LogicInterval * 4)
                     _logicAccumulator = LogicInterval;
 
@@ -401,6 +449,8 @@ namespace Snake3D
                     _logicAccumulator -= LogicInterval;
                 }
             }
+
+            _proxy.UpdateSpin(dt); //копим угол только пока игра идёт
 
             Render();
         }
@@ -434,6 +484,7 @@ namespace Snake3D
             if (ulen > 1e-9) { ux /= ulen; uy /= ulen; uz /= ulen; }
 
             _proxy.SetOrientation(fx, fy, fz, ux, uy, uz);
+            _proxy.UpdateCrystalOrientations();
 
             for (int i = 0; i < _nextPositions.Count; i++)
             {
@@ -447,37 +498,42 @@ namespace Snake3D
                 if (i == 0) _proxy.MoveHead(0, x, y, z);
                 else _proxy.MoveSegment(i, x, y, z);
             }
+
+
             _proxy.FollowHead(0);
         }
 
         private void UpdateSmoothTurn()
         {
-            DateTime now = DateTime.UtcNow;
-
-            // Плавный поворот уже идёт — продолжаем, пока есть зажатая клавиша
+            if (!TapTurnEnabled) return; // в плавном режиме всё решают StartTurn/ReleaseTurn
             if (_smoothActive) return;
 
-            // Проверяем, не удерживается ли какая-то клавиша дольше порога
-            if (_leftPressTime.HasValue && now - _leftPressTime.Value > HoldThreshold)
+            // Дискретный режим: как раньше — ждём порог удержания
+            DateTime now = DateTime.UtcNow;
+            if (_leftPressTime.HasValue && now - _leftPressTime.Value > HoldThreshold ||
+                _rightPressTime.HasValue && now - _rightPressTime.Value > HoldThreshold ||
+                _upPressTime.HasValue && now - _upPressTime.Value > HoldThreshold ||
+                _downPressTime.HasValue && now - _downPressTime.Value > HoldThreshold)
             {
-                _yawRate = TurnSpeedRadPerSecond;
                 _smoothActive = true;
+                ApplyHeldDirections();
             }
-            else if (_rightPressTime.HasValue && now - _rightPressTime.Value > HoldThreshold)
-            {
-                _yawRate = -TurnSpeedRadPerSecond;
-                _smoothActive = true;
-            }
-            else if (_upPressTime.HasValue && now - _upPressTime.Value > HoldThreshold)
-            {
-                _pitchRate = TurnSpeedRadPerSecond;
-                _smoothActive = true;
-            }
-            else if (_downPressTime.HasValue && now - _downPressTime.Value > HoldThreshold)
-            {
-                _pitchRate = -TurnSpeedRadPerSecond;
-                _smoothActive = true;
-            }
+        }
+
+        private void ApplyHeldDirections()
+        {
+            bool up = _upPressTime.HasValue, down = _downPressTime.HasValue;
+            bool left = _leftPressTime.HasValue, right = _rightPressTime.HasValue;
+
+            if (up && down) _pitchRate = 0;
+            else if (up) _pitchRate = TurnSpeedRadPerSecond;
+            else if (down) _pitchRate = -TurnSpeedRadPerSecond;
+            else _pitchRate = 0;
+
+            if (left && right) _yawRate = 0;
+            else if (left) _yawRate = TurnSpeedRadPerSecond;
+            else if (right) _yawRate = -TurnSpeedRadPerSecond;
+            else _yawRate = 0;
         }
 
         private Point3D FindFreeSpot()
@@ -501,6 +557,10 @@ namespace Snake3D
                     foreach (var c in _crystals)
                         if (Distance(p, c) < _foodRadius * 2 + 2.0) { free = false; break; }
 
+                if (free)
+                    foreach (var m in _mines)
+                        if (Distance(p, m) < _foodRadius * 2 + 2.0) { free = false; break; }
+
                 if (free) return p;
             }
             // не нашли за 200 попыток — ставим куда угодно в пределах
@@ -514,13 +574,23 @@ namespace Snake3D
         {
             while (_crystals.Count < CrystalCount)
             {
-                var p = FindFreeSpot();
+                Point3D p = FindFreeSpot();
                 _crystals.Add(p);
                 _proxy.AddCrystalAt(_crystals.Count - 1, p.X, p.Y, p.Z, _foodRadius);
             }
         }
 
         private void SpawnCrystal() => EnsureCrystals();
+
+        private void EnsureMines()
+        {
+            while (_mines.Count < MineCount)
+            {
+                Point3D p = FindFreeSpot();
+                _mines.Add(p);
+                _proxy.AddMineAt(_mines.Count - 1, p.X, p.Y, p.Z, _foodRadius);
+            }
+        }
 
         //private void SpawnCrystal()
         //{

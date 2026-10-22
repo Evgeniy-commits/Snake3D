@@ -59,21 +59,7 @@ namespace Snake3D
             if (Proxy == null || !_isInitialized) return;
 
             // 1. Сетка (шаг 1.0)
-            Proxy.CreateGrid(arenaSize, 1.0);
-
-            // 2. Стены
-            //Proxy.CreateWalls(arenaSize);
-
-            // 3. Змея (начальная позиция)
-            // Голова
-            //Proxy.AddSegment(0, 0, 0, segmentRadius, 0);
-            // Тело 1
-            //Proxy.AddSegment(-1, 0, 0, segmentRadius, 1);
-            // Тело 2
-            //Proxy.AddSegment(-2, 0, 0, segmentRadius, 2);
-
-            // 4. Еда
-            //Proxy.AddFood(5, 5, 0, foodRadius);
+            Proxy.CreateGrid(arenaSize, 5.0);
 
             // 5. Финальная подгонка камеры
             Proxy.Redraw();

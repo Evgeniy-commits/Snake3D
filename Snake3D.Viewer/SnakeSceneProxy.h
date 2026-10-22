@@ -92,7 +92,11 @@ namespace Snake3DViewer
         std::vector<gp_Pnt>* _basePositions;
         std::vector<gp_Pnt>* _positions;
         std::vector<Handle(AIS_Shape)>* _crystals;
-
+        std::vector<gp_Pnt>* _crystalBase;
+        std::vector<Handle(AIS_Shape)>* _mines;         
+        std::vector<gp_Pnt>* _mineBase;                 
+        std::vector<TopoDS_Shape*>* _models;            // 0=голова, 1=хвост, 2=кристалл, 4=мина
+        std::vector<gp_Vec>* _segmentDirs;
         double _dirX, _dirY, _dirZ;
         double _upX, _upY, _upZ;
 
@@ -101,6 +105,22 @@ namespace Snake3DViewer
 
         //Для камеры
         int _viewMode = 0; // 0 = вид следования (дефолт), 1 = вид из кабины
+
+        //Анимация
+        double _spinAngle = 0.0;
+        static constexpr double SpinSpeed = 3.0;
+
+        //Для стен
+        void AddWallBox(const gp_Pnt& p, double dx, double dy, double dz)
+        {
+            TopoDS_Shape w = BRepPrimAPI_MakeBox(p, dx, dy, dz).Shape();
+            Handle(AIS_Shape) aisShape = new AIS_Shape(w);
+            aisShape->SetDisplayMode(1);
+            aisShape->SetColor(Quantity_Color(0.18, 0.18, 0.22, Quantity_TOC_RGB));
+            aisShape->SetTransparency(0.75);
+            _walls->push_back(aisShape);
+            _aisContext()->Display(aisShape, Standard_True);
+        }
 
     public:
         SnakeSceneProxy()
@@ -115,6 +135,11 @@ namespace Snake3DViewer
             _basePositions = new std::vector<gp_Pnt>();
             _positions = new std::vector<gp_Pnt>();
             _crystals = new std::vector<Handle(AIS_Shape)>();
+            _crystalBase = new std::vector<gp_Pnt>();
+            _mines = new std::vector<Handle(AIS_Shape)>();
+            _mineBase = new std::vector<gp_Pnt>();
+            _models = new std::vector<TopoDS_Shape*>();
+            _segmentDirs = new std::vector<gp_Vec>();
 
             _dirX = 0.0;  _dirY = 1.0;  _dirZ = 0.0;
             _upX = 0.0;   _upY = 0.0;   _upZ = 1.0;
@@ -136,6 +161,13 @@ namespace Snake3DViewer
 
             delete _crystals;
             _crystals = nullptr;
+
+            for (auto* m : *_models) delete m;
+            delete _models;        _models = nullptr;
+            delete _crystalBase;   _crystalBase = nullptr;
+            delete _mines;         _mines = nullptr;
+            delete _mineBase;      _mineBase = nullptr;
+            delete _segmentDirs;   _segmentDirs = nullptr;
         }
 
         !SnakeSceneProxy()
@@ -152,6 +184,61 @@ namespace Snake3DViewer
 
             delete _crystals;
             _crystals = nullptr;
+
+            for (auto* m : *_models) delete m;
+            delete _models;        _models = nullptr;
+            delete _crystalBase;   _crystalBase = nullptr;
+            delete _mines;         _mines = nullptr;
+            delete _mineBase;      _mineBase = nullptr;
+            delete _segmentDirs;   _segmentDirs = nullptr;
+        }
+
+        TopoDS_Shape* GetModel(int kind)
+        {
+            if (kind < 0 || (int)_models->size() <= kind) return nullptr;
+            return (*_models)[kind];
+        }
+
+        // kind: 1=хвост, 2=кристалл, 4=мина. targetSize — габарит модели в единицах арены.
+        bool LoadStepModel(System::String^ path, int kind, double targetSize)
+        {
+            if (kind < 0 || kind > 4) return false;
+
+            msclr::interop::marshal_context ctx;
+            std::string nativePath = ctx.marshal_as<std::string>(path);
+
+            STEPControl_Reader reader;
+            if (reader.ReadFile(nativePath.c_str()) != IFSelect_RetDone) return false;
+            reader.TransferRoots();
+            if (reader.NbShapes() < 1) return false;
+
+            TopoDS_Shape raw = reader.OneShape();
+
+            Bnd_Box box;
+            BRepBndLib::Add(raw, box);
+            Standard_Real xmin, ymin, zmin, xmax, ymax, zmax;
+            box.Get(xmin, ymin, zmin, xmax, ymax, zmax);
+
+            double dx = xmax - xmin, dy = ymax - ymin, dz = zmax - zmin;
+            double maxDim = (std::max)(dx, (std::max)(dy, dz));
+            if (maxDim < 1e-9) return false;
+
+            double scale = targetSize / maxDim;
+
+            // центр в начало координат — трансформы потом работают вокруг нуля
+            gp_Pnt c((xmin + xmax) / 2.0, (ymin + ymax) / 2.0, (zmin + zmax) / 2.0);
+            gp_Trsf toOrigin;
+            toOrigin.SetTranslation(gp_Vec(c, gp_Pnt(0, 0, 0)));
+            TopoDS_Shape shaped = BRepBuilderAPI_Transform(raw, toOrigin, Standard_True).Shape();
+
+            gp_Trsf scaler;
+            scaler.SetScale(gp_Pnt(0, 0, 0), scale);
+            shaped = BRepBuilderAPI_Transform(shaped, scaler, Standard_True).Shape();
+
+            while ((int)_models->size() <= kind) _models->push_back(nullptr);
+            delete (*_models)[kind];
+            (*_models)[kind] = new TopoDS_Shape(shaped);
+            return true;
         }
 
         bool LoadHeadModel(System::String^ path, double targetRadius)
@@ -274,6 +361,10 @@ namespace Snake3DViewer
             if (!_aisContext().IsNull())
                 _aisContext()->EraseAll(Standard_False);
             _crystals->clear();
+            _crystalBase->clear();    
+            _mines->clear();          
+            _mineBase->clear();       
+            _segmentDirs->clear();    
             _snakeSegments->clear();
             _walls->clear();
             _basePositions->clear();
@@ -295,11 +386,12 @@ namespace Snake3DViewer
                 {
                     // Голова — загруженная .step-модель
                     aisShape = new AIS_Shape(*_headModel);
+                    aisShape->SetColor(Quantity_Color(0.42, 0.44, 0.48, Quantity_TOC_RGB));
                     basePos = gp_Pnt(0, 0, 0);   // модель центрирована в нуле — вращение вокруг него
                 }
                 else
                 {
-                    // Fallback — старая капсула (с исправленной базой цилиндра)
+                    // Fallback — старая капсула
                     gp_Ax2 ax2(gp_Pnt(center.X(), center.Y() - radius, center.Z()), gp_Dir(0, 1, 0));
                     TopoDS_Shape cylinder = BRepPrimAPI_MakeCylinder(ax2, radius, radius * 2).Shape();
                     TopoDS_Shape sphere1 = BRepPrimAPI_MakeSphere(gp_Pnt(center.X(), center.Y() + radius, center.Z()), radius).Shape();
@@ -324,16 +416,34 @@ namespace Snake3DViewer
             }
             else
             {
-                // Тело — синие сферы
-                BRepPrimAPI_MakeSphere sphere(center, radius);
-                aisShape = new AIS_Shape(sphere.Shape());
-                aisShape->SetColor(Quantity_Color(Quantity_NOC_BLUE));
+                TopoDS_Shape* tailModel = GetModel(1);
+                if (tailModel != nullptr)
+                {
+                    aisShape = new AIS_Shape(*tailModel);
+                    aisShape->SetColor(Quantity_Color(0.45, 0.95, 0.45, Quantity_TOC_RGB));
+                    aisShape->SetTransparency(0.25);
+                    basePos = gp_Pnt(0, 0, 0);
+
+                    // как у кристалла: сразу ставим в нужную точку
+                    gp_Trsf trans;
+                    trans.SetTranslation(gp_Vec(gp_Pnt(0, 0, 0), center));
+                    aisShape->SetLocalTransformation(trans);
+                }
+                else
+                {
+                    // Фолбэк — синяя сфера (обязателен: aisShape не должен остаться пустым)
+                    BRepPrimAPI_MakeSphere sphere(center, radius);
+                    aisShape = new AIS_Shape(sphere.Shape());
+                    aisShape->SetColor(Quantity_Color(0.45, 0.95, 0.45, Quantity_TOC_RGB));
+                    aisShape->SetTransparency(0.25);
+                }
             }
 
             aisShape->SetDisplayMode(1);
             _snakeSegments->push_back(aisShape);
-            _basePositions->push_back(basePos);   // ← вместо push_back(center)
+            _basePositions->push_back(basePos);
             _positions->push_back(center);
+            _segmentDirs->push_back(gp_Vec(0, 1, 0));
             _aisContext()->Display(aisShape, Standard_True);
         }
 
@@ -341,23 +451,55 @@ namespace Snake3DViewer
         {
             if (index < 0 || index >= static_cast<int>(_snakeSegments->size())) return;
             gp_Pnt newPos(x, y, z);
-            //gp_Pnt newCenter(x, y, z);
-            //BRepPrimAPI_MakeSphere sphere(newCenter, radius);
-           /* gp_Dir axis(0, 0, 1);
-            TopoDS_Shape newShape = CreateCapsule(newCenter, axis, radius * 2, radius);
-            (*_snakeSegments)[index]->SetShape(newShape);*/
-            //(*_snakeSegments)[index]->SetShape(sphere.Shape());
-
             (*_positions)[index] = newPos;
-            gp_Trsf trsf;
-            trsf.SetTranslation(gp_Vec((*_basePositions)[index], newPos));
-            (*_snakeSegments)[index]->SetLocalTransformation(trsf);
 
-            Quantity_Color color = (index == 0)
-                ? Quantity_Color(Quantity_NOC_RED)
-                : Quantity_Color(Quantity_NOC_BLUE);
-            (*_snakeSegments)[index]->SetColor(color);
-            //_aisContext()->Redisplay((*_snakeSegments)[index], Standard_True);
+            // Направление сегмента — на предыдущий (головной) сегмент цепочки.
+            // Сдвиг идёт от хвоста к голове, поэтому positions[index-1] уже актуален.
+            if (index > 0)
+            {
+                gp_Vec toPrev((*_positions)[index - 1], newPos);
+                if (toPrev.Magnitude() > 1e-6)
+                {
+                    toPrev.Normalize();
+                    (*_segmentDirs)[index] = toPrev;
+                }
+            }
+
+            gp_Trsf trsf;
+            gp_Vec dir = (*_segmentDirs)[index];
+
+            if (index == 0 || !GetModel(1))
+            {
+                // Голова или фолбэк-сферы: только перенос
+                trsf.SetTranslation(gp_Vec((*_basePositions)[index], newPos));
+            }
+            else
+            {
+                // Хвост-модель: перенос + разворот вдоль цепочки + вращение
+                gp_Dir fwd(dir);
+                gp_Dir upRef(0, 0, 1);
+                if (std::abs(fwd.Z()) > 0.999) upRef = gp_Dir(0, 1, 0);
+
+                gp_Dir right = fwd.Crossed(upRef);
+                gp_Dir up = gp_Dir(right.Crossed(fwd));
+
+                // через один: чётные по часовой, нечётные — против
+                double ang = _spinAngle * ((index % 2 == 0) ? 1.0 : -1.0);
+                double c = cos(ang), s = sin(ang);
+                gp_Dir r2(right.X() * c - up.X() * s,
+                    right.Y() * c - up.Y() * s,
+                    right.Z() * c - up.Z() * s);
+                gp_Dir u2(up.X() * c + right.X() * s,
+                    up.Y() * c + right.Y() * s,
+                    up.Z() * c + right.Z() * s);
+
+                trsf.SetValues(
+                    r2.X(), fwd.X(), u2.X(), newPos.X() - (*_basePositions)[index].X(),
+                    r2.Y(), fwd.Y(), u2.Y(), newPos.Y() - (*_basePositions)[index].Y(),
+                    r2.Z(), fwd.Z(), u2.Z(), newPos.Z() - (*_basePositions)[index].Z());
+            }
+            
+            (*_snakeSegments)[index]->SetLocalTransformation(trsf);
             _aisContext()->Redisplay((*_snakeSegments)[index], Standard_False);
         }
 
@@ -400,59 +542,49 @@ namespace Snake3DViewer
             double half = arenaSize / 2.0;
             double thickness = 1.0;
 
-            // Левая
-            TopoDS_Shape w1 = BRepPrimAPI_MakeBox(
-                gp_Pnt(-half + thickness / 2.0, 0, 0),
-                thickness, arenaSize, arenaSize
-            ).Shape();
-            AddWall(w1);
+            // Левая и правая (X)
+            AddWallBox(gp_Pnt(-half - thickness / 2.0, -half, -half), thickness, arenaSize, arenaSize);
+            AddWallBox(gp_Pnt(half - thickness / 2.0, -half, -half), thickness, arenaSize, arenaSize);
 
-            // Правая
-            TopoDS_Shape w2 = BRepPrimAPI_MakeBox(
-                gp_Pnt(half - thickness / 2.0, 0, 0),
-                thickness, arenaSize, arenaSize
-            ).Shape();
-            AddWall(w2);
+            // Передняя и задняя (Y)
+            AddWallBox(gp_Pnt(-half, -half - thickness / 2.0, -half), arenaSize, thickness, arenaSize);
+            AddWallBox(gp_Pnt(-half, half - thickness / 2.0, -half), arenaSize, thickness, arenaSize);
 
-            // Задняя
-            TopoDS_Shape w3 = BRepPrimAPI_MakeBox(
-                gp_Pnt(0, -half + thickness / 2.0, 0),
-                arenaSize, thickness, arenaSize
-            ).Shape();
-            AddWall(w3);
-
-            // Передняя
-            TopoDS_Shape w4 = BRepPrimAPI_MakeBox(
-                gp_Pnt(0, half - thickness / 2.0, 0),
-                arenaSize, thickness, arenaSize
-            ).Shape();
-            AddWall(w4);
+            // Пол и потолок (Z)
+            AddWallBox(gp_Pnt(-half, -half, -half - thickness / 2.0), arenaSize, arenaSize, thickness);
+            AddWallBox(gp_Pnt(-half, -half, half - thickness / 2.0), arenaSize, arenaSize, thickness);
         }
 
         void CreateArenaWalls(double size)
         {
             double half = size / 2.0;
-            double step = size / 10.0;
+            double step = size / 2.0;
 
-            // --- Стена 1: Задняя (Z = -half) ---
+            // --- Задняя (Z = -half) и передняя (Z = +half) ---
             for (double s = -half; s <= half + 0.001; s += step)
             {
                 AddArenaLine(gp_Pnt(s, -half, -half), gp_Pnt(s, half, -half));
                 AddArenaLine(gp_Pnt(-half, s, -half), gp_Pnt(half, s, -half));
+                AddArenaLine(gp_Pnt(s, -half, half), gp_Pnt(s, half, half));
+                AddArenaLine(gp_Pnt(-half, s, half), gp_Pnt(half, s, half));
             }
 
-            // --- Стена 2: Левая (X = -half) ---
+            // --- Левая (X = -half) и правая (X = +half) ---
             for (double s = -half; s <= half + 0.001; s += step)
             {
                 AddArenaLine(gp_Pnt(-half, s, -half), gp_Pnt(-half, s, half));
                 AddArenaLine(gp_Pnt(-half, -half, s), gp_Pnt(-half, half, s));
-            }
-
-            // --- Стена 3: Правая (X = +half) ---
-            for (double s = -half; s <= half + 0.001; s += step)
-            {
                 AddArenaLine(gp_Pnt(half, s, -half), gp_Pnt(half, s, half));
                 AddArenaLine(gp_Pnt(half, -half, s), gp_Pnt(half, half, s));
+            }
+
+            // --- Пол (Y = -half) и потолок (Y = +half) ---
+            for (double s = -half; s <= half + 0.001; s += step)
+            {
+                AddArenaLine(gp_Pnt(s, -half, -half), gp_Pnt(s, -half, half));
+                AddArenaLine(gp_Pnt(-half, -half, s), gp_Pnt(half, -half, s));
+                AddArenaLine(gp_Pnt(s, half, -half), gp_Pnt(s, half, half));
+                AddArenaLine(gp_Pnt(-half, half, s), gp_Pnt(half, half, s));
             }
         }
 
@@ -461,7 +593,7 @@ namespace Snake3DViewer
             BRepBuilderAPI_MakeEdge edge(p1, p2);
             Handle(AIS_Shape) aisEdge = new AIS_Shape(edge.Shape());
             aisEdge->SetDisplayMode(0);
-            aisEdge->SetColor(Quantity_Color(0.4, 0.4, 0.4, Quantity_TOC_RGB));
+            aisEdge->SetColor(Quantity_Color(Quantity_NOC_BLACK));
             _aisContext()->Display(aisEdge, Standard_True);
         }
 
@@ -499,17 +631,90 @@ namespace Snake3DViewer
         void AddCrystalAt(int index, double x, double y, double z, double radius)
         {
             gp_Pnt center(x, y, z);
-            BRepPrimAPI_MakeSphere sphere(center, radius);
+            Handle(AIS_Shape) aisShape;
+            TopoDS_Shape* model = GetModel(2);
 
-            Handle(AIS_Shape) aisShape = new AIS_Shape(sphere.Shape());
+            if (model != nullptr)
+            {
+                aisShape = new AIS_Shape(*model);
+                aisShape->SetColor(Quantity_Color(0.40, 0.65, 1.00, Quantity_TOC_RGB)); // светло-синий
+                aisShape->SetTransparency(0.25);
+            }
+            else
+            {
+                BRepPrimAPI_MakeSphere sphere(center, radius);
+                aisShape = new AIS_Shape(sphere.Shape());
+                aisShape->SetColor(Quantity_Color(Quantity_NOC_CYAN));
+            }
             aisShape->SetDisplayMode(1);
-            aisShape->SetColor(Quantity_Color(Quantity_NOC_CYAN));
 
-            if (index >= static_cast<int>(_crystals->size()))
-                _crystals->resize(index + 1);
+            if (index >= (int)_crystals->size())    _crystals->resize(index + 1);
+            if (index >= (int)_crystalBase->size()) _crystalBase->resize(index + 1, gp_Pnt(0, 0, 0));
             (*_crystals)[index] = aisShape;
+            (*_crystalBase)[index] = center;
+
+            if (model != nullptr)
+            {
+                gp_Trsf trans;
+                trans.SetTranslation(gp_Vec(gp_Pnt(0, 0, 0), center));
+                aisShape->SetLocalTransformation(trans);
+            }
 
             _aisContext()->Display(aisShape, Standard_True);
+        }
+
+        // Ориентирует все кристаллы 
+        void UpdateCrystalOrientations()
+        {
+            if (_crystals->empty()) return;
+            if (_aisContext().IsNull()) return;
+
+            gp_Dir fwd(_dirX, _dirY, _dirZ);
+            gp_Dir up(_upX, _upY, _upZ);
+
+            gp_Dir right(fwd.Crossed(up));
+            up = gp_Dir(right.Crossed(fwd));
+
+            // вращение вокруг вертикали (up): поворачиваем right и fwd, ось up не трогаем
+            double c = cos(_spinAngle), s = sin(_spinAngle);
+            gp_Dir rightR(right.X() * c - fwd.X() * s,
+                right.Y() * c - fwd.Y() * s,
+                right.Z() * c - fwd.Z() * s);
+            gp_Dir fwdR(fwd.X() * c + right.X() * s,
+                fwd.Y() * c + right.Y() * s,
+                fwd.Z() * c + right.Z() * s);
+            
+            //// вращение вокруг оси полёта — заметно даже для симметричной модели
+            //double c = cos(_spinAngle), s = sin(_spinAngle);
+            //gp_Dir upR(up.X() * c - right.X() * s,
+            //    up.Y() * c - right.Y() * s,
+            //    up.Z() * c - right.Z() * s);
+            //gp_Dir rightR(right.X() * c + up.X() * s,
+            //    right.Y() * c + up.Y() * s,
+            //    right.Z() * c + up.Z() * s);
+
+            for (size_t i = 0; i < _crystals->size(); ++i)
+            {
+                if ((*_crystals)[i].IsNull()) continue;
+
+                gp_Pnt pos = (*_crystalBase)[i];
+
+                gp_Trsf trsf;
+                trsf.SetValues(
+                    rightR.X(), fwdR.X(), up.X(), pos.X(),
+                    rightR.Y(), fwdR.Y(), up.Y(), pos.Y(),
+                    rightR.Z(), fwdR.Z(), up.Z(), pos.Z());
+
+                (*_crystals)[i]->SetLocalTransformation(trsf);
+                _aisContext()->Redisplay((*_crystals)[i], Standard_False);
+            }
+        }
+
+        void UpdateSpin(double dt)
+        {
+            _spinAngle += dt * SpinSpeed;
+            // держим угол в пределах 2π, чтобы double не рос бесконечно
+            if (_spinAngle > 2.0 * M_PI) _spinAngle -= 2.0 * M_PI;
         }
 
         void RemoveCrystalAt(int index)
@@ -518,6 +723,62 @@ namespace Snake3DViewer
             if (!(*_crystals)[index].IsNull() && !_aisContext().IsNull())
                 _aisContext()->Erase((*_crystals)[index], Standard_False);
             _crystals->erase(_crystals->begin() + index);
+            if (index < (int)_crystalBase->size())
+                _crystalBase->erase(_crystalBase->begin() + index);
+        }
+
+        void RemoveMineAt(int index)
+        {
+            if (index < 0 || index >= static_cast<int>(_mines->size())) return;
+            if (!(*_mines)[index].IsNull() && !_aisContext().IsNull())
+                _aisContext()->Erase((*_mines)[index], Standard_False);
+            _mines->erase(_mines->begin() + index);
+            if (index < (int)_mineBase->size())
+                _mineBase->erase(_mineBase->begin() + index);
+        }
+
+        //Мины
+        void ClearMines()
+        {
+            for (auto& m : *_mines)
+                if (!m.IsNull() && !_aisContext().IsNull())
+                    _aisContext()->Erase(m, Standard_False);
+            _mines->clear();
+            _mineBase->clear();
+        }
+
+        void AddMineAt(int index, double x, double y, double z, double radius)
+        {
+            gp_Pnt center(x, y, z);
+            Handle(AIS_Shape) aisShape;
+            TopoDS_Shape* model = GetModel(4);
+
+            if (model != nullptr)
+            {
+                aisShape = new AIS_Shape(*model);
+                aisShape->SetColor(Quantity_Color(Quantity_NOC_ORANGE));
+            }
+            else
+            {
+                BRepPrimAPI_MakeSphere sphere(center, radius);
+                aisShape = new AIS_Shape(sphere.Shape());
+                aisShape->SetColor(Quantity_Color(Quantity_NOC_RED));
+            }
+            aisShape->SetDisplayMode(1);
+
+            if (index >= (int)_mines->size())    _mines->resize(index + 1);
+            if (index >= (int)_mineBase->size()) _mineBase->resize(index + 1, gp_Pnt(0, 0, 0));
+            (*_mines)[index] = aisShape;
+            (*_mineBase)[index] = center;
+
+            if (model != nullptr)
+            {
+                gp_Trsf trans;
+                trans.SetTranslation(gp_Vec(gp_Pnt(0, 0, 0), center));
+                aisShape->SetLocalTransformation(trans);
+            }
+
+            _aisContext()->Display(aisShape, Standard_True);
         }
 
         void AddGridLine(const gp_Pnt& p1, const gp_Pnt& p2, Quantity_NameOfColor baseColor)
@@ -540,32 +801,25 @@ namespace Snake3DViewer
 
             double half = arenaSize / 2.0;
 
-            // --- Стена 1: Задняя (Z = -half) ---
             for (double s = -half; s <= half + 0.001; s += step)
             {
+                // Z = ±half
                 AddArenaLine(gp_Pnt(s, -half, -half), gp_Pnt(s, half, -half));
                 AddArenaLine(gp_Pnt(-half, s, -half), gp_Pnt(half, s, -half));
-            }
+                AddArenaLine(gp_Pnt(s, -half, half), gp_Pnt(s, half, half));
+                AddArenaLine(gp_Pnt(-half, s, half), gp_Pnt(half, s, half));
 
-            // --- Стена 2: Левая (X = -half) ---
-            for (double s = -half; s <= half + 0.001; s += step)
-            {
+                // X = ±half
                 AddArenaLine(gp_Pnt(-half, s, -half), gp_Pnt(-half, s, half));
                 AddArenaLine(gp_Pnt(-half, -half, s), gp_Pnt(-half, half, s));
-            }
-
-            // --- Стена 3: Правая (X = +half) ---
-            for (double s = -half; s <= half + 0.001; s += step)
-            {
                 AddArenaLine(gp_Pnt(half, s, -half), gp_Pnt(half, s, half));
                 AddArenaLine(gp_Pnt(half, -half, s), gp_Pnt(half, half, s));
-            }
 
-            // --- Стена 4: Пол (Y = -half) ---
-            for (double s = -half; s <= half + 0.001; s += step)
-            {
+                // Y = ±half (пол и потолок)
                 AddArenaLine(gp_Pnt(s, -half, -half), gp_Pnt(s, -half, half));
                 AddArenaLine(gp_Pnt(-half, -half, s), gp_Pnt(half, -half, s));
+                AddArenaLine(gp_Pnt(s, half, -half), gp_Pnt(s, half, half));
+                AddArenaLine(gp_Pnt(-half, half, s), gp_Pnt(half, half, s));
             }
         }
 
@@ -671,6 +925,7 @@ namespace Snake3DViewer
             _snakeSegments->clear();
             _basePositions->clear();
             _positions->clear();
+            _segmentDirs->clear();
             if (!_aisContext().IsNull())
                 _aisContext()->UpdateCurrentViewer();
         }
@@ -723,11 +978,11 @@ namespace Snake3DViewer
             else
             {
                 // Дефолт
-                camBack = 10.0;
+                camBack = 15.0;
                 camUp = 3.0;
-                lookAhead = 4.0;
+                lookAhead = 10.0;
                 fov = 45.0;
-                lerpSpeed = 0.15;
+                lerpSpeed = 0.07;
             }
 
             // Геометрия камеры жёсткая: глаз на фиксированном отлёте и высоте,
@@ -793,6 +1048,6 @@ namespace Snake3DViewer
             sx = (int)px;
             sy = (int)py;   // origin — левый НИЖНИЙ угол; в WPF перевернём
             return true;
-        }
+        }       
     };
 }

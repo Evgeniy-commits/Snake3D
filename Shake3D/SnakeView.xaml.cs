@@ -49,7 +49,7 @@ namespace Snake3D
                 _viewport = new SnakeViewport();
                 ViewportHost.Child = _viewport;
 
-                double arenaSize = 50.0;
+                double arenaSize = 100.0;
 
                 // 1. Рисуем сетку ОДИН раз (до игры)
                 // InitializeGameScene вызывает InitialFit() — камера встанет по сетке
@@ -71,18 +71,6 @@ namespace Snake3D
                 //    InitialFit теперь сработает по сетке+змея+еда вместе
                 _game.Reset();
                 _game.Start();
-
-                // 6. Таймер
-                // Логика 10 Гц
-                //_timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(100) };
-                //_timer.Tick += (s, ev) => _game?.Update();
-                //_timer.Start();
-
-                // Рендер 30 Гц — интерполяция
-                //_renderTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(33) };
-                //_renderTimer.Tick += (s, ev) => OnRenderFrame();
-                //_renderTimer.Start();
-                //CompositionTarget.Rendering += OnRenderFrameRendering;
 
                 // Единый кадровый цикл
                 _lastFrameTime = DateTime.UtcNow;
@@ -185,41 +173,6 @@ namespace Snake3D
                 UpdateHudVisuals(); // содержимое бывшего OnRenderFrame после _game.Render()
             }
         }
-
-        //private void OnRenderFrame()
-        //{
-        //    if (_game == null || _hud == null) return;
-
-        //    _game.Render();
-
-        //    bool cockpit = _viewport?.Proxy != null && _viewport.Proxy.IsCockpitView();
-        //    _hud.ShowCrosshair(cockpit);
-
-        //    if (!cockpit)
-        //    {
-        //        _hud.PlaceCrystal(null, 0);
-        //        return;
-        //    }
-
-        //    // маркер кристалла
-        //    var c = _game.CrystalPos;
-        //    int sx = 0, sy = 0;
-        //    bool inFront = false;
-        //    bool ok = _viewport!.Proxy!.ProjectToScreen(c.X, c.Y, c.Z, ref sx, ref sy, ref inFront);
-
-        //    double w = ViewportHost.ActualWidth;
-        //    double h = ViewportHost.ActualHeight;
-
-        //    if (ok && inFront && sx >= 0 && sx <= w && sy >= 0 && sy <= h)
-        //    {
-        //        // V3d даёт координаты от НИЖНЕГО левого угла — переворачиваем по Y
-        //        _hud.PlaceCrystal(sx, h - sy);
-        //    }
-        //    else
-        //    {
-        //        _hud.PlaceCrystal(null, 0); // вне экрана — скрываем
-        //    }
-        //}
 
         private void UpdateHudVisuals()
         {
