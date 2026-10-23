@@ -1,11 +1,32 @@
-﻿using System;
+﻿//Краткий «подкапотный» конвейер за один кадр
+//WPF DispatcherTimer даёт dt (например, 16.6 мс).
+
+//SnakeGame.Frame(dt):
+//применяет удерживаемые повороты (Родригес) — плавно;
+//добавляет dt в аккумулятор логики; если набралось 0.05 с — один или несколько Update() (шаг змейки, коллизии, счёт, рост);
+//Render(): считает alpha(0..1) от последнего логического тика, интерполирует позиции и ориентации, отправляет их в прокси.
+
+//SnakeSceneProxy:
+//MoveHead / MoveSegment строят gp_Trsf(перенос + поворот по базису fwd/up/right)
+//и меняют только матрицу уже созданных AIS_Shape;
+//UpdateCrystalOrientations синхронно крутит все кристаллы на _spinAngle;
+//FollowHead смещает камеру (с lerp или без, в зависимости от режима);
+//Redraw() — OCCT перерисовывает сцену через OpenGl_GraphicDriver
+//прямо в HWND WPF-контейнера.
+
+//Итого: логика «думает» рывками по 50 мс, рендер сглаживает это в 60 FPS,
+//а весь тяжёлый CAD-аппарат OCCT просыпается только один раз при загрузке
+//моделей — дальше работают лишь дешёвые матрицы.
+
+using Snake3DViewer;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Media.Media3D;
-using Snake3DViewer;
+using static System.Net.Mime.MediaTypeNames;
 
 namespace Snake3D
 {
@@ -102,7 +123,7 @@ namespace Snake3D
         private DateTime? _downPressTime;
         private bool _smoothActive;
 
-        public const double LogicInterval = 0.05;
+        public const double LogicInterval = 0.05; //20 Гц
 
         private readonly List<Point3D> _prevPositions = new();
         private readonly List<Point3D> _nextPositions = new();
@@ -171,7 +192,13 @@ namespace Snake3D
 
         public void Reset()
         {
-            _proxy.RemoveAllSnake();
+            _proxy.ClearScene();
+
+            // Арена: стены + сетка пересоздаются после каждой чистки.
+            // Без этого после первого рестарта арена пустая.
+            _proxy.CreateWalls(_arenaSize);
+            _proxy.CreateGrid(_arenaSize, 5.0);   // шаг сетки — подставьте свой
+
             _segments.Clear();
 
             for (int i = 0; i < 3; i++)
@@ -200,13 +227,10 @@ namespace Snake3D
             _prevForward = _forward; _nextForward = _forward;
             _prevUp = _up; _nextUp = _up;
             _lastLogicTick = DateTime.UtcNow;
-
            
-            _proxy.ClearCrystals();
             _crystals.Clear();
             EnsureCrystals();
 
-            _proxy.ClearMines();
             _mines.Clear();
             EnsureMines();
 
@@ -254,17 +278,6 @@ namespace Snake3D
                 case 4: _downPressTime = null; break;
             }
 
-            //if (_smoothActive)
-            //{
-            //    //отпустили клавишу во время плавного поворота.
-            //    //стоп - когда нет зажатых клавиш
-            //    if (_leftPressTime == null && _rightPressTime == null &&
-            //        _upPressTime == null && _downPressTime == null)
-            //    {
-            //        StopTurning();
-            //    }
-            //}
-
             if (_smoothActive)
             {
                 ApplyHeldDirections();
@@ -284,37 +297,30 @@ namespace Snake3D
             _smoothActive = false;
         }
 
-        public void Update()
+        // Шаг 1 конвейера: применить накопленный поворот
+        private void ApplyTurn()
         {
-            if (!IsRunning || IsGameOver || IsPaused) return;
-            if (_segments.Count == 0) { TriggerGameOver(); return; }
-
-            // состояние ДО тика — для интерполяции
-            _prevPositions.Clear();
-            foreach (var s in _segments) _prevPositions.Add(s);
-            _prevForward = _forward;
-            _prevUp = _up;
-
-            double dt = LogicInterval;
-
-            UpdateSmoothTurn();
-
-            //палавный поворот(если есть скорость)
-            //if (_yawRate != 0) RotateYawContinuos(_yawRate * dt);
-            //if (_pitchRate != 0) RotatePitchContinuos(_pitchRate * dt);
-
-            // применяем один поворот на 90°, если был запрос
             switch (_pendingTurn)
             {
-                case 1: RotateYaw(1); break;  // лево
-                case 2: RotateYaw(-1); break;  // право
+                case 1: RotateYaw(1); break;    // лево
+                case 2: RotateYaw(-1); break;   // право
                 case 3: RotatePitch(1); break;  // вверх
-                case 4: RotatePitch(-1); break;  // вниз
+                case 4: RotatePitch(-1); break; // вниз
             }
             _pendingTurn = 0;
+        }
 
-            //было _direction, теперь _forward
-            Point3D newHead = _segments[0] + _forward * _step;
+        // Шаг 2 конвейера: шаг вперёд 
+        // Возвращает null, если голова вылетела за арену
+        // (TriggerGameOver уже вызван). Через oldTail отдаёт
+        // позицию хвоста до сдвига — она нужна для роста.
+        private bool Advance(out Point3D newHead, out Point3D oldTail)
+        {
+            newHead = default;
+            oldTail = default;
+
+            // было _direction, теперь _forward
+            newHead = _segments[0] + _forward * _step;
 
             //границы куба по всем осям
             if (Math.Abs(newHead.X) > _arenaSize ||
@@ -322,9 +328,26 @@ namespace Snake3D
                 Math.Abs(newHead.Z) > _arenaSize)
             {
                 TriggerGameOver();
-                return;
+                return false;
             }
 
+            // запоминаем хвост до сдвига
+            oldTail = _segments[_segments.Count - 1];
+
+            //сдвиг тела
+            for (int i = _segments.Count - 1; i > 0; i--)
+            {
+                _segments[i] = _segments[i - 1];
+            }
+            _segments[0] = newHead;
+
+            return true;
+        }
+
+        // Шаг 3 конвейера: кристаллы, мины, рост, самопересечение
+        // Возвращает true, если игра закончена (TriggerGameOver вызван).
+        private bool CheckCollisions(Point3D newHead, Point3D oldTail)
+        {
             // Сумма радиусов: голова космолета + кристалл
             double combinedRadius = _segmentRadius + _foodRadius;
 
@@ -362,7 +385,7 @@ namespace Snake3D
                     if (Score < 0)
                     {
                         TriggerGameOver();
-                        return;
+                        return true;
                     }
 
                     EnsureMines(); //восстанавливаем мины
@@ -370,16 +393,6 @@ namespace Snake3D
                 }
             }
 
-            // запоминаем хвост до сдвига
-            Point3D oldTail = _segments[_segments.Count - 1];
-
-            //сдвиг тела
-            for (int i = _segments.Count - 1; i > 0; i--)
-            {
-                _segments[i] = _segments[i - 1];                
-            }
-            _segments[0] = newHead;
-            
             //рост
             if (ateFood)
             {
@@ -390,17 +403,40 @@ namespace Snake3D
             //пропуск первых 4 сегментов (было 2)
             if (_segments.Count > 5)
             {
-                var head = _segments[0];
                 double crashRadius = _step * 0.6;
                 for (int i = 4; i < _segments.Count; i++)
                 {
-                    if (Distance(head, _segments[i]) < crashRadius)
+                    if (Distance(newHead, _segments[i]) < crashRadius)
                     {
                         TriggerGameOver();
-                        return;
+                        return true;
                     }
                 }
             }
+
+            return false;
+        }
+
+        public void Update()
+        {
+            if (!IsRunning || IsGameOver || IsPaused) return;
+            if (_segments.Count == 0) { TriggerGameOver(); return; }
+
+            // состояние ДО тика — для интерполяции
+            _prevPositions.Clear();
+            foreach (var s in _segments) _prevPositions.Add(s);
+            _prevForward = _forward;
+            _prevUp = _up;
+
+            double dt = LogicInterval;
+
+            UpdateSmoothTurn();
+
+            // Конвейер тика: поворот → шаг → проверки
+            ApplyTurn();
+            if (!Advance(out Point3D newHead, out Point3D oldTail))
+                return;                                            // проигрыш уже оформлен в Advance
+            if (CheckCollisions(newHead, oldTail)) return;         // проигрыш уже оформлен
 
             //камера
             //_proxy.FollowHead(0);
@@ -422,8 +458,159 @@ namespace Snake3D
             _nextForward = _forward;
             _nextUp = _up;
             _lastLogicTick = DateTime.UtcNow;
-
         }
+
+        //public void Update()
+        //{
+        //    if (!IsRunning || IsGameOver || IsPaused) return;
+        //    if (_segments.Count == 0) { TriggerGameOver(); return; }
+
+        //    // состояние ДО тика — для интерполяции
+        //    _prevPositions.Clear();
+        //    foreach (var s in _segments) _prevPositions.Add(s);
+        //    _prevForward = _forward;
+        //    _prevUp = _up;
+
+        //    //double dt = LogicInterval;
+
+        //    UpdateSmoothTurn();
+
+        //    //палавный поворот(если есть скорость)
+        //    //if (_yawRate != 0) RotateYawContinuos(_yawRate * dt);
+        //    //if (_pitchRate != 0) RotatePitchContinuos(_pitchRate * dt);
+
+        //    // применяем один поворот на 90°, если был запрос
+        //    switch (_pendingTurn)
+        //    {
+        //        case 1: RotateYaw(1); break;  // лево
+        //        case 2: RotateYaw(-1); break;  // право
+        //        case 3: RotatePitch(1); break;  // вверх
+        //        case 4: RotatePitch(-1); break;  // вниз
+        //    }
+        //    _pendingTurn = 0;
+
+        //    //было _direction, теперь _forward
+        //    Point3D newHead = _segments[0] + _forward * _step;
+
+        //    //границы куба по всем осям
+        //    if (Math.Abs(newHead.X) > _arenaSize ||
+        //        Math.Abs(newHead.Y) > _arenaSize ||
+        //        Math.Abs(newHead.Z) > _arenaSize)
+        //    {
+        //        TriggerGameOver();
+        //        return;
+        //    }
+
+        //    // Сумма радиусов: голова космолета + кристалл
+        //    double combinedRadius = _segmentRadius + _foodRadius;
+
+        //    // Допуск «почти коснулся»: если расстояние меньше суммы радиусов + небольшой запас
+        //    // Запас нужен, чтобы компенсировать «пропуск» кадра (космолет пролетел между кадрами)
+        //    double tolerance = 0.8;
+
+        //    bool ateFood = false;
+
+        //    for (int i = 0; i < _crystals.Count; i++)
+        //    {
+        //        if (Distance(newHead, _crystals[i]) <= _segmentRadius + _foodRadius + tolerance)
+        //        {
+        //            Score += 10;
+        //            ScoreChanged?.Invoke(this, Score);
+        //            ateFood = true;
+
+        //            _proxy.RemoveCrystalAt(i);
+        //            _crystals.RemoveAt(i);
+        //            EnsureCrystals();   // сразу достраиваем до пяти
+        //            break;
+        //        }
+        //    }
+
+        //    for (int i = 0; i < _mines.Count; i++)
+        //    {
+        //        if (Distance(newHead, _mines[i]) <= _segmentRadius + _foodRadius + tolerance)
+        //        {
+        //            Score -= MineScore;
+        //            ScoreChanged?.Invoke(this, Score);
+
+        //            _proxy.RemoveMineAt(i);
+        //            _mines.RemoveAt(i);
+
+        //            if (Score < 0)
+        //            {
+        //                TriggerGameOver();
+        //                return;
+        //            }
+
+        //            EnsureMines(); //восстанавливаем мины
+        //            break;
+        //        }
+        //    }
+
+        //    // запоминаем хвост до сдвига
+        //    Point3D oldTail = _segments[_segments.Count - 1];
+
+        //    //сдвиг тела
+        //    for (int i = _segments.Count - 1; i > 0; i--)
+        //    {
+        //        _segments[i] = _segments[i - 1];                
+        //    }
+        //    _segments[0] = newHead;
+
+        //    //рост
+        //    if (ateFood)
+        //    {
+        //        _segments.Add(oldTail);
+        //        _proxy.AddSegment(oldTail.X, oldTail.Y, oldTail.Z, _segmentRadius, _segments.Count - 1);
+        //    }
+
+        //    //пропуск первых 4 сегментов (было 2)
+        //    if (_segments.Count > 5)
+        //    {
+        //        var head = _segments[0];
+        //        double crashRadius = _step * 0.6;
+        //        for (int i = 4; i < _segments.Count; i++)
+        //        {
+        //            if (Distance(head, _segments[i]) < crashRadius)
+        //            {
+        //                TriggerGameOver();
+        //                return;
+        //            }
+        //        }
+        //    }
+
+        //    //камера
+        //    //_proxy.FollowHead(0);
+        //    //_proxy.Redraw();
+
+        //    // состояние ПОСЛЕ тика
+        //    _nextPositions.Clear();
+        //    foreach (var s in _segments) _nextPositions.Add(s);
+
+        //    //нормализация, чтобы модель не дергалась
+        //    double fl = Math.Sqrt(_forward.X * _forward.X + _forward.Y * _forward.Y + _forward.Z * _forward.Z);
+        //    if (fl > 1e-9) _forward = new Vector3D(_forward.X / fl, _forward.Y / fl, _forward.Z / fl);
+
+        //    double ud = _up.X * _forward.X + _up.Y * _forward.Y + _up.Z * _forward.Z;
+        //    _up = new Vector3D(_up.X - ud * _forward.X, _up.Y - ud * _forward.Y, _up.Z - ud * _forward.Z);
+        //    double ul = Math.Sqrt(_up.X * _up.X + _up.Y * _up.Y + _up.Z * _up.Z);
+        //    if (ul > 1e-9) _up = new Vector3D(_up.X / ul, _up.Y / ul, _up.Z / ul);
+
+        //    _nextForward = _forward;
+        //    _nextUp = _up;
+        //    _lastLogicTick = DateTime.UtcNow;
+
+        //}
+
+        //Это классический паттерн game loop с fixed timestep:
+
+        //Логика шагает дискретно(ровно 20 раз в секунду независимо от FPS).
+        //dt берётся из таймера WPF — он плавающий.Аккумулятор копит его и
+        //«сбрасывает» по 0.05 с на каждый логический тик,
+        //возможно выполняя несколько тиков за один кадр(если FPS низкий).
+        //Ограничение LogicInterval * 4 — предохранитель: если игра была свернута
+        //на минуту, не нужно за один кадр делать 1200 тиков — иначе всё телепортируется.
+        //Рендер идёт каждый кадр, но не синхронно с логикой — этим занимается
+        //интерполяция.
         public void Frame(double dt)
         {
             if (IsRunning && !IsGameOver && !IsPaused)
@@ -455,7 +642,15 @@ namespace Snake3D
             Render();
         }
 
-        // Вызывается часто (30 Гц): плавно тянет visuals от прошлого тика к новому
+        //Каждая позиция сегмента вычисляется как lerp(prev, next, alpha).
+        //То есть визуально змейка «плывёт» между логическими позициями,
+        //а не прыгает раз в 50 мс.Аналогично интерполируются _forward и _up,
+        //с последующей ортогонализацией, чтобы базис не «съезжал» из-за
+        //смешивания двух состояний.
+        //Здесь же вызываются _proxy.SetOrientation(...) и _proxy.UpdateCrystalOrientations()
+        //— OCCT получает актуальные оси полёта.
+
+        //плавно тянет visuals от прошлого тика к новому
         public void Render()
         {
             if (_segments.Count == 0) return;
@@ -536,6 +731,10 @@ namespace Snake3D
             else _yawRate = 0;
         }
 
+        //Поиск свободного места(FindFreeSpot)
+        //Случайная точка с проверкой: не на змейке, не на кристалле,
+        //не на мине.До 200 попыток; если не нашли — ставим куда угодно
+        //(иначе игра зависнет, если арена забита объектами).
         private Point3D FindFreeSpot()
         {
             double margin = 1.5;
@@ -580,8 +779,6 @@ namespace Snake3D
             }
         }
 
-        private void SpawnCrystal() => EnsureCrystals();
-
         private void EnsureMines()
         {
             while (_mines.Count < MineCount)
@@ -591,54 +788,6 @@ namespace Snake3D
                 _proxy.AddMineAt(_mines.Count - 1, p.X, p.Y, p.Z, _foodRadius);
             }
         }
-
-        //private void SpawnCrystal()
-        //{
-        //    double halfSize = _arenaSize / 2.0;
-        //    double margin = _segmentRadius + 0.5;
-
-        //    Point3D candidate = new Point3D(0, 0, 0);
-        //    int attempts = 0;
-        //    const int maxAttempts = 50;
-
-        //    bool collidesWithShip;
-
-        //    _proxy.RemoveFood();
-
-        //    do
-        //    {
-        //        double x = (_random.NextDouble() * (_arenaSize - 2 * margin)) - (halfSize - margin);
-        //        double y = (_random.NextDouble() * (_arenaSize - 2 * margin)) - (halfSize - margin);
-        //        double z = (_random.NextDouble() * (_arenaSize - 2 * margin)) - (halfSize - margin);
-
-        //        candidate = new Point3D(x, y, z);
-
-        //        collidesWithShip = false;
-        //        foreach (var segment in _segments)
-        //        {
-        //            double dx = segment.X - candidate.X;
-        //            double dy = segment.Y - candidate.Y;
-        //            double dz = segment.Z - candidate.Z;
-        //            double dist = Math.Sqrt(dx * dx + dy * dy + dz * dz);
-
-        //            if (dist < (_segmentRadius + _foodRadius))
-        //            {
-        //                collidesWithShip = true;
-        //                break;
-        //            }
-        //        }
-
-        //        attempts++;
-        //    } while (collidesWithShip && attempts < maxAttempts);
-
-        //    if (attempts >= maxAttempts)
-        //    {
-        //        candidate = new Point3D(0, 0, 0);
-        //    }
-
-        //    _crystalPos = candidate;
-        //    _proxy.AddCrystal(_crystalPos.X, _crystalPos.Y, _crystalPos.Z, _foodRadius);
-        //}
 
         private void TriggerGameOver()
         {
@@ -690,6 +839,13 @@ namespace Snake3D
             _up = Vector3D.CrossProduct(right, _forward).Normalized();
         }
 
+        //Это векторная форма поворота: v·cosθ + (axis×v)·sinθ + axis(axis·v)(1−cosθ)
+        //после раскрытия скобок.В коде просто разделено на «параллельную» и
+        //«перпендикулярную» части.
+        //Повороты: рысканье(yaw) — вокруг _up(влево/вправо), тангаж(pitch) —
+        //вокруг right = forward × up(вверх/вниз). После pitch пересчитывается
+        //_up, чтобы он не «отрывался» от курса.
+        //Для быстрых дискретных поворотов есть отдельный трюк — Rotate90
         private static Vector3D RotateVector(Vector3D v, Vector3D axis, double theta)
         {
             axis = axis.Normalized();

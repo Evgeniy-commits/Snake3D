@@ -1,4 +1,29 @@
-﻿#pragma once
+﻿////////////////////////////////////////////////////////////////
+//┌─────────────────────────────┐
+//│  C# (WPF)— SnakeGame        │  игровая логика, таймер, ввод, счёт
+//├─────────────────────────────┤
+//│  C++ / CLI — SnakeSceneProxy│  «мост» : управляемый класс - обёртка
+//├─────────────────────────────┤
+//│  OpenCASCADE(нативный C++)  │  геометрия, STEP - модели, рендер OpenGL
+//└─────────────────────────────┘
+////////////////////////////////////////////////////////////////////////////
+
+//Ключевая идея : C# ничего не знает про OCCT, OCCT ничего не знает про WPF.
+// Посредник — SnakeSceneProxy на C++ / CLI.Это управляемый(ref class) класс, 
+// который владеет нативными OCCT - объектами и наружу отдаёт простой 
+// API : AddSegment, MoveHead, FollowHead, RemoveCrystalAt и т.д.
+
+//Деление ответственности :
+
+//C# решает где находятся объекты и что происходит(логика игры, физика, коллизии, интерполяция).
+//C++ / CLI + OCCT решает как это нарисовать(построение BRep - геометрии, матрицы трансформаций, камера, окно).
+//Связка идёт через #pragma comment(lib, ...) — перечисление OCCT - 
+// библиотек(TKernel, TKV3d, TKOpenGl, TKBool и т.д.) 
+// и #pragma warning(disable: 4263 4264) — подавление предупреждений о том, что деструктор ~SnakeSceneProxy() 
+// и финализатор !SnakeSceneProxy() имеют одинаковую сигнатуру
+// (в C++ / CLI оба компилируются в Finalize, различаются только семантикой вызова).
+
+#pragma once
 #pragma warning(disable: 4263 4264)
 #include "pch.h"
 #include <Windows.h>
@@ -56,29 +81,15 @@ using namespace System::Runtime::InteropServices;
 
 namespace Snake3DViewer
 {
-    static TCollection_AsciiString ToAsciiString(String^ str)
-    {
-        if (String::IsNullOrEmpty(str))
-            return TCollection_AsciiString();
-        array<unsigned char>^ bytes = System::Text::Encoding::UTF8->GetBytes(str);
-        if (bytes->Length <= 256)
-        {
-            pin_ptr<unsigned char> pin = &bytes[0];
-            return TCollection_AsciiString(reinterpret_cast<const char*>(pin));
-        }
-        else
-        {
-            std::vector<char> buf(bytes->Length + 1);
-            pin_ptr<unsigned char> pin = &bytes[0];
-            memcpy(buf.data(), pin, bytes->Length);
-            buf[bytes->Length] = '\0';
-            return TCollection_AsciiString(buf.data());
-        }
-    }
-
     public ref class SnakeSceneProxy
     {
     private:
+        //Управляемый класс нельзя хранить напрямую в полях нативные объекты — 
+        //сборщик мусора может переместить объект в памяти, а нативный указатель 
+        //«не узнает» об этом.Поэтому здесь используется NCollection_Haft — 
+        //обёртка OCCT, которая хранит указатель на хендл в куче и не даёт 
+        //GC двигать сам хендл :
+
         // OCCT-хендлы через NCollection_Haft
         NCollection_Haft<Handle(V3d_Viewer)> _viewer;
         NCollection_Haft<Handle(V3d_View)> _view;
@@ -89,6 +100,7 @@ namespace Snake3DViewer
         // Нативные указатели на векторы 
         std::vector<Handle(AIS_Shape)>* _snakeSegments;
         std::vector<Handle(AIS_Shape)>* _walls;
+        std::vector<Handle(AIS_Shape)>* _grid;
         std::vector<gp_Pnt>* _basePositions;
         std::vector<gp_Pnt>* _positions;
         std::vector<Handle(AIS_Shape)>* _crystals;
@@ -123,6 +135,9 @@ namespace Snake3DViewer
         }
 
     public:
+        //Доступ через скобки: _viewer() = new V3d_Viewer(...) — 
+        //это разыменование хафта (получение ссылки на сам Handle).
+
         SnakeSceneProxy()
         {
             _viewer() = NULL;
@@ -132,6 +147,7 @@ namespace Snake3DViewer
             _foodShape() = NULL;
             _snakeSegments = new std::vector<Handle(AIS_Shape)>();
             _walls = new std::vector<Handle(AIS_Shape)>();
+            _grid = new std::vector<Handle(AIS_Shape)>();
             _basePositions = new std::vector<gp_Pnt>();
             _positions = new std::vector<gp_Pnt>();
             _crystals = new std::vector<Handle(AIS_Shape)>();
@@ -147,15 +163,32 @@ namespace Snake3DViewer
             _headModel = nullptr;
         }
 
+        //Под капотом:
+
+        //~SnakeSceneProxy() — это реализация IDisposable.Dispose().
+        //Вызывается детерминированно(using или Dispose() из C#).
+        // 
+        //!SnakeSceneProxy() — настоящий финализатор, его вызовет GC в недетерминированный
+        //момент, уже в потоке финализации, когда прокси доберут в очереди сборщика.
+        // 
+        //В финализаторе нельзя трогать managed - объекты(например, System::Console) — 
+        //они могут быть уже собраны.Здесь оба метода делают только delete нативных указателей — это правильно.
+        // 
+        //Типичная ошибка новичка — забыть delete в финализаторе : тогда утечка нативной памяти 
+        //при пропуске Dispose.Здесь паттерн соблюдён(кроме _walls, _snakeSegments и т.п., 
+        //которые в финализаторе действительно освобождаются).
+        // 
+        //Нативные STL - контейнеры(std::vector<...>*) — обычные указатели в неуправляемой куче, 
+        //их нужно удалять вручную, что и делается в обоих методах.
+
         ~SnakeSceneProxy()
         {
             delete _snakeSegments;
             delete _walls;
-            delete _basePositions;
-            delete _positions;
-            _basePositions = nullptr;
-            _positions = nullptr;
-
+            delete _grid;   _grid = nullptr;
+            delete _basePositions; _basePositions = nullptr;
+            delete _positions; _positions = nullptr;
+            
             delete _headModel; 
             _headModel = nullptr;
 
@@ -174,16 +207,13 @@ namespace Snake3DViewer
         {
             delete _snakeSegments;
             delete _walls;
-            delete _basePositions;
-            delete _positions;
-            _basePositions = nullptr;
-            _positions = nullptr;
+            delete _grid;   _grid = nullptr;
+            delete _basePositions; _basePositions = nullptr;
+            delete _positions; _positions = nullptr;
 
-            delete _headModel; 
-            _headModel = nullptr;
+            delete _headModel; _headModel = nullptr;
 
-            delete _crystals;
-            _crystals = nullptr;
+            delete _crystals; _crystals = nullptr;
 
             for (auto* m : *_models) delete m;
             delete _models;        _models = nullptr;
@@ -199,7 +229,11 @@ namespace Snake3DViewer
             return (*_models)[kind];
         }
 
-        // kind: 1=хвост, 2=кристалл, 4=мина. targetSize — габарит модели в единицах арены.
+        //Методы LoadStepModel(path, kind, targetSize) и LoadHeadModel(path, targetRadius) 
+        //решают одну задачу : привести произвольную CAD - модель к единому «игровому» 
+        //масштабу и ориентации.
+        //kind: 1=хвост, 2=кристалл, 4=мина. targetSize — габарит модели в единицах 
+        //арены.
         bool LoadStepModel(System::String^ path, int kind, double targetSize)
         {
             if (kind < 0 || kind > 4) return false;
@@ -207,6 +241,10 @@ namespace Snake3DViewer
             msclr::interop::marshal_context ctx;
             std::string nativePath = ctx.marshal_as<std::string>(path);
 
+            //1. Чтение: STEPControl_Reader::ReadFile → TransferRoots() — STEP - 
+            // файл это иерархия корневых сущностей; после переноса все собранные 
+            // формы доступны через NbShapes(), OneShape() склеивает их в одну 
+            // TopoDS_Shape.
             STEPControl_Reader reader;
             if (reader.ReadFile(nativePath.c_str()) != IFSelect_RetDone) return false;
             reader.TransferRoots();
@@ -214,6 +252,9 @@ namespace Snake3DViewer
 
             TopoDS_Shape raw = reader.OneShape();
 
+            //2. Габариты: BRepBndLib::Add(shape, box) строит осеориентированный 
+            // bounding box.Из него берём максимальный размер по осям — 
+            // это «диагональ» модели.
             Bnd_Box box;
             BRepBndLib::Add(raw, box);
             Standard_Real xmin, ymin, zmin, xmax, ymax, zmax;
@@ -223,8 +264,16 @@ namespace Snake3DViewer
             double maxDim = (std::max)(dx, (std::max)(dy, dz));
             if (maxDim < 1e-9) return false;
 
+            //3. Масштабирование: scale = targetSize / maxDim — модель вписывается 
+            // в заданный габарит арены.Например, кристалл получает габарит 3.0, 
+            // мина — 1.5, голова — длину, равную 4 × радиус 
+            // сегмента(как у старой капсулы, чтобы игровой радиус коллизии совпал 
+            // с визуальным).
             double scale = targetSize / maxDim;
 
+            //4. Центрирование: Транформацией gp_Trsf::SetTranslation(gp_Vec(c, gp_Pnt(0, 0, 0))) 
+            // центр bbox переносится в начало координат.Это критично : дальше все 
+            // вращения идут вокруг нуля, и модель крутится на месте, а не по орбите.
             // центр в начало координат — трансформы потом работают вокруг нуля
             gp_Pnt c((xmin + xmax) / 2.0, (ymin + ymax) / 2.0, (zmin + zmax) / 2.0);
             gp_Trsf toOrigin;
@@ -280,6 +329,9 @@ namespace Snake3DViewer
             scaler.SetScale(gp_Pnt(0, 0, 0), scale);
             TopoDS_Shape scaled = BRepBuilderAPI_Transform(centered, scaler, Standard_True).Shape();
 
+            //Переориентация головы.SetRotation(gp_Ax1(O, gp_Dir(0, 0, 1)), -π / 2) — 
+            // поворот вокруг Z, чтобы продольная ось модели совпала с осью полёта 
+            // Y(в игре _forward = (0, 1, 0)).
             gp_Trsf reorient;
             reorient.SetRotation(gp_Ax1(gp_Pnt(0, 0, 0), gp_Dir(0, 0, 1)), -M_PI / 2.0);
             scaled = BRepBuilderAPI_Transform(scaled, reorient, Standard_True).Shape();
@@ -289,23 +341,33 @@ namespace Snake3DViewer
             return true;
         }
 
+        //Инициализация 3д сцены - построение графической иерархии.
         bool Initialize(System::IntPtr windowHandle)
         {
             try
             {
                 Handle(Aspect_DisplayConnection) dispCon;
-                _graphicDriver() = new OpenGl_GraphicDriver(dispCon);
+                _graphicDriver() = new OpenGl_GraphicDriver(dispCon);  //Рендер OpenGL
 
-                _viewer() = new V3d_Viewer(_graphicDriver());
-                _viewer()->SetDefaultLights();
-                _viewer()->SetLightOn();
+                _viewer() = new V3d_Viewer(_graphicDriver());          //Сцена
+                _viewer()->SetDefaultLights();                         //Свет
+                _viewer()->SetLightOn();                               
 
-                _view() = _viewer()->CreateView();
+                _view() = _viewer()->CreateView();                     //Вьюпорт
 
+                //Привязка к HWND
+                //WNT_Window — обёртка над существующим HWND(панель WPF через WindowsFormsHost 
+                //или WinForms Panel).OCCT не создаёт своё окно, а рисует прямо в 
+                //клиентскую область чужого окна.wntWindow->Map() нужен, 
+                //чтобы OCCT знал, что окно видимо.
                 Handle(WNT_Window) wntWindow = new WNT_Window(reinterpret_cast<HWND>(windowHandle.ToPointer()));
                 _view()->SetWindow(wntWindow);
                 if (!wntWindow->IsMapped()) wntWindow->Map();
 
+                //Менеджер отображения
+                //AIS_InteractiveContext — центральный менеджер : хранит все 
+                //отображаемые объекты, их цвета, режимы, выделение.
+                //Именно через него идут все Display / Erase / Redisplay.
                 _aisContext() = new AIS_InteractiveContext(_viewer());
                 _aisContext()->UpdateCurrentViewer();
 
@@ -328,6 +390,10 @@ namespace Snake3DViewer
             return true;
         }
 
+        //При изменении размера окна WPF сначала меняет размер самого 
+        //HWND(через WinAPI SetWindowPos), затем вызывается _view()->MustBeResized() — 
+        //OCCT пересчитывает вьюпорт и матрицу проекции.Без MustBeResized() картинка 
+        //растянется или обрежется.
         // Метод изменения размера: использует WinAPI SetWindowPos
         void Resize(int width, int height)
         {
@@ -358,24 +424,35 @@ namespace Snake3DViewer
 
         void ClearScene()
         {
-            if (!_aisContext().IsNull())
-                _aisContext()->EraseAll(Standard_False);
-            _crystals->clear();
-            _crystalBase->clear();    
-            _mines->clear();          
-            _mineBase->clear();       
-            _segmentDirs->clear();    
-            _snakeSegments->clear();
+            RemoveAllSnake();
+            ClearCrystals();
+            ClearMines();
+
+            // Стены и сетка — часть сцены: стираем адресно и чистим векторы.
+            // EraseAll НЕ используем: он стёр бы и декорации, которые
+            // в игровом цикле никто заново не рисует.
+            for (auto& g : *_grid)
+                if (!g.IsNull() && !_aisContext().IsNull())
+                    _aisContext()->Erase(g, Standard_False);
+            _grid->clear();
+
+            for (auto& w : *_walls)
+                if (!w.IsNull() && !_aisContext().IsNull())
+                    _aisContext()->Erase(w, Standard_False);
             _walls->clear();
-            _basePositions->clear();
-            _positions->clear();
-            _foodShape() = Handle(AIS_Shape)();
+
             if (!_aisContext().IsNull())
                 _aisContext()->UpdateCurrentViewer();
         }
 
         void AddSegment(double x, double y, double z, double radius, int index)
         {
+            //Фолбэки обязательны : aisShape не должен остаться пустым(Handle без объекта)
+            //— иначе _aisContext()->Display(aisShape) упадёт.
+
+            //Паттерн для фолбэков и моделей один и тот же : строится геометрия → 
+            //оборачивается в AIS_Shape → SetDisplayMode(1) (заливка) → цвет → пуш 
+            //в вектор → Display в контексте.
             gp_Pnt center(x, y, z);
             Handle(AIS_Shape) aisShape;
             gp_Pnt basePos = center;   // база по умолчанию — точка построения
@@ -555,38 +632,38 @@ namespace Snake3DViewer
             AddWallBox(gp_Pnt(-half, -half, half - thickness / 2.0), arenaSize, arenaSize, thickness);
         }
 
-        void CreateArenaWalls(double size)
-        {
-            double half = size / 2.0;
-            double step = size / 2.0;
+        //void CreateArenaWalls(double size)
+        //{
+        //    double half = size / 2.0;
+        //    double step = size / 2.0;
 
-            // --- Задняя (Z = -half) и передняя (Z = +half) ---
-            for (double s = -half; s <= half + 0.001; s += step)
-            {
-                AddArenaLine(gp_Pnt(s, -half, -half), gp_Pnt(s, half, -half));
-                AddArenaLine(gp_Pnt(-half, s, -half), gp_Pnt(half, s, -half));
-                AddArenaLine(gp_Pnt(s, -half, half), gp_Pnt(s, half, half));
-                AddArenaLine(gp_Pnt(-half, s, half), gp_Pnt(half, s, half));
-            }
+        //    // --- Задняя (Z = -half) и передняя (Z = +half) ---
+        //    for (double s = -half; s <= half + 0.001; s += step)
+        //    {
+        //        AddArenaLine(gp_Pnt(s, -half, -half), gp_Pnt(s, half, -half));
+        //        AddArenaLine(gp_Pnt(-half, s, -half), gp_Pnt(half, s, -half));
+        //        AddArenaLine(gp_Pnt(s, -half, half), gp_Pnt(s, half, half));
+        //        AddArenaLine(gp_Pnt(-half, s, half), gp_Pnt(half, s, half));
+        //    }
 
-            // --- Левая (X = -half) и правая (X = +half) ---
-            for (double s = -half; s <= half + 0.001; s += step)
-            {
-                AddArenaLine(gp_Pnt(-half, s, -half), gp_Pnt(-half, s, half));
-                AddArenaLine(gp_Pnt(-half, -half, s), gp_Pnt(-half, half, s));
-                AddArenaLine(gp_Pnt(half, s, -half), gp_Pnt(half, s, half));
-                AddArenaLine(gp_Pnt(half, -half, s), gp_Pnt(half, half, s));
-            }
+        //    // --- Левая (X = -half) и правая (X = +half) ---
+        //    for (double s = -half; s <= half + 0.001; s += step)
+        //    {
+        //        AddArenaLine(gp_Pnt(-half, s, -half), gp_Pnt(-half, s, half));
+        //        AddArenaLine(gp_Pnt(-half, -half, s), gp_Pnt(-half, half, s));
+        //        AddArenaLine(gp_Pnt(half, s, -half), gp_Pnt(half, s, half));
+        //        AddArenaLine(gp_Pnt(half, -half, s), gp_Pnt(half, half, s));
+        //    }
 
-            // --- Пол (Y = -half) и потолок (Y = +half) ---
-            for (double s = -half; s <= half + 0.001; s += step)
-            {
-                AddArenaLine(gp_Pnt(s, -half, -half), gp_Pnt(s, -half, half));
-                AddArenaLine(gp_Pnt(-half, -half, s), gp_Pnt(half, -half, s));
-                AddArenaLine(gp_Pnt(s, half, -half), gp_Pnt(s, half, half));
-                AddArenaLine(gp_Pnt(-half, half, s), gp_Pnt(half, half, s));
-            }
-        }
+        //    // --- Пол (Y = -half) и потолок (Y = +half) ---
+        //    for (double s = -half; s <= half + 0.001; s += step)
+        //    {
+        //        AddArenaLine(gp_Pnt(s, -half, -half), gp_Pnt(s, -half, half));
+        //        AddArenaLine(gp_Pnt(-half, -half, s), gp_Pnt(half, -half, s));
+        //        AddArenaLine(gp_Pnt(s, half, -half), gp_Pnt(s, half, half));
+        //        AddArenaLine(gp_Pnt(-half, half, s), gp_Pnt(half, half, s));
+        //    }
+        //}
 
         void AddArenaLine(const gp_Pnt& p1, const gp_Pnt& p2)
         {
@@ -595,31 +672,9 @@ namespace Snake3DViewer
             aisEdge->SetDisplayMode(0);
             aisEdge->SetColor(Quantity_Color(Quantity_NOC_BLACK));
             _aisContext()->Display(aisEdge, Standard_True);
+            _grid->push_back(aisEdge);
         }
-
-        void AddFood(double x, double y, double z, double radius)
-        {
-            gp_Pnt center(x, y, z);
-            BRepPrimAPI_MakeSphere sphere(center, radius);
-            _foodShape() = new AIS_Shape(sphere.Shape());
-            _foodShape()->SetDisplayMode(1);
-            _foodShape()->SetColor(Quantity_Color(Quantity_NOC_YELLOW));
-            _aisContext()->Display(_foodShape(), Standard_True);            
-        }
-
-        void AddCrystal(double x, double y, double z, double radius)
-        {
-            gp_Pnt center(x, y, z);
-            BRepPrimAPI_MakeSphere sphere(center, radius);
-
-            Handle(AIS_Shape) aisShape = new AIS_Shape(sphere.Shape());
-            aisShape->SetDisplayMode(1);
-            aisShape->SetColor(Quantity_Color(Quantity_NOC_CYAN));
-
-            _aisContext()->Display(aisShape, Standard_True);
-            _foodShape() = aisShape;
-        }
-
+        
         void ClearCrystals()
         {
             for (auto& c : *_crystals)
@@ -675,7 +730,12 @@ namespace Snake3DViewer
             gp_Dir right(fwd.Crossed(up));
             up = gp_Dir(right.Crossed(fwd));
 
-            // вращение вокруг вертикали (up): поворачиваем right и fwd, ось up не трогаем
+            // вращение вокруг вертикали (up): поворачиваем right и fwd, ось up 
+            // не трогаем
+            //Это формула Родригеса в упрощённом виде для угла вокруг фиксированной оси.
+            //Один общий _spinAngle экономит состояние : не нужно хранить фазу
+            //каждого кристалла.UpdateSpin(dt) инкрементирует угол и заворачивает 
+            //его в 2π — чтобы double не рос бесконечно и не терял точность.
             double c = cos(_spinAngle), s = sin(_spinAngle);
             gp_Dir rightR(right.X() * c - fwd.X() * s,
                 right.Y() * c - fwd.Y() * s,
@@ -699,6 +759,12 @@ namespace Snake3DViewer
 
                 gp_Pnt pos = (*_crystalBase)[i];
 
+                //Метод SetValues принимает матрицу по строкам.
+                //Первые три столбца — базис локальной системы координат
+                //(куда смотрят локальные X, Y, Z объекта), 
+                //четвёртый — вектор переноса.Это стандартная компоновка : 
+                //строим ортонормированный базис(right, forward, up) и кладём его
+                //в матрицу.
                 gp_Trsf trsf;
                 trsf.SetValues(
                     rightR.X(), fwdR.X(), up.X(), pos.X(),
@@ -840,6 +906,8 @@ namespace Snake3DViewer
             return false;
         }
 
+
+        // Служебные методы отладки: вызываются только из UI-отладки
         void Zoom(int x1, int y1, int x2, int y2)
         {
             if (!_view().IsNull()) _view()->Zoom(x1, y1, x2, y2);
@@ -874,7 +942,7 @@ namespace Snake3DViewer
         {
             if (!_view().IsNull())
                 _view()->SetBackgroundColor(Quantity_TOC_RGB, (float)r / 255, (float)g / 255, (float)b / 255);
-        }
+        }    
         
         void RemoveSegment(int index)
         {
@@ -896,6 +964,12 @@ namespace Snake3DViewer
             _snakeSegments->erase(_snakeSegments->begin() + index);
             _basePositions->erase(_basePositions->begin() + index);
             _positions->erase(_positions->begin() + index);
+
+            //_segmentDirs параллелен _positions по индексам.
+            // Без этой строки после первого удаления направления
+            // поедут: dir[i] начнёт указывать на чужой сегмент,
+            // и модели хвоста развернутся не туда.
+            _segmentDirs->erase(_segmentDirs->begin() + index);
 
             // 5. ВАЖНО: В OCCT индексы в векторе должны совпадать с логикой C#
             // Так как мы используем erase, элементы после удаленного автоматически сдвинулись.
@@ -1025,6 +1099,12 @@ namespace Snake3DViewer
             _view()->Redraw();
         }
 
+        //Скалярное произведение viewDir · toPoint — это проверка «перед камерой или за ней».
+        // Если точка за глазом, проекция математически «вывернута» и её координаты 
+        // бессмысленны — флаг inFront предупреждает об этом.Обратите внимание : 
+        // _view()->Project возвращает координаты с origin в левом нижнем углу, 
+        // а WPF считает от левого верхнего — поэтому в 
+        // C# понадобится sy = height - sy.
         // Проекция 3D-точки в пиксели вьюпорта.
         // inFront = true, если точка перед камерой.
         bool ProjectToScreen(double x, double y, double z,
