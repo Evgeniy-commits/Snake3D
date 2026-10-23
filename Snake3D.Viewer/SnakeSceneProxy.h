@@ -130,6 +130,18 @@ namespace Snake3DViewer
             aisShape->SetDisplayMode(1);
             aisShape->SetColor(Quantity_Color(0.18, 0.18, 0.22, Quantity_TOC_RGB));
             aisShape->SetTransparency(0.75);
+
+            // Скрыть граничные линии рёбер: по умолчанию AIS рисует контуры
+            // граней серыми линиями — на светлом фоне они пробиваются.
+            //aisShape->Attributes()->SetFaceBoundaryDraw(Standard_False);
+
+            // вместо SetFaceBoundaryDraw(false):
+            Handle(Prs3d_LineAspect) boundary = new Prs3d_LineAspect(
+                Quantity_Color(0.18, 0.18, 0.22, Quantity_TOC_RGB), // цвет = цвет стены
+                Aspect_TOL_SOLID,
+                1.0);                                               // толщина 1 px
+            aisShape->Attributes()->SetFaceBoundaryAspect(boundary);
+            
             _walls->push_back(aisShape);
             _aisContext()->Display(aisShape, Standard_True);
         }
@@ -908,9 +920,20 @@ namespace Snake3DViewer
 
 
         // Служебные методы отладки: вызываются только из UI-отладки
-        void Zoom(int x1, int y1, int x2, int y2)
+        /*void Zoom(int x1, int y1, int x2, int y2)
         {
             if (!_view().IsNull()) _view()->Zoom(x1, y1, x2, y2);
+        }*/
+
+        // Колёсный зум: factor > 1 — приблизить, factor < 1 — отдалить.
+        // Работаем напрямую со Scale камеры: старый Zoom(x1,y1,x2,y2)
+        // использует только длину вектора и не различает направление колеса.
+        void ZoomBy(double factor)
+        {
+            if (_view().IsNull()) return;
+            Handle(Graphic3d_Camera) cam = _view()->Camera();
+            cam->SetScale(cam->Scale() / factor);
+            _view()->Redraw();
         }
 
         void Pan(int x, int y)

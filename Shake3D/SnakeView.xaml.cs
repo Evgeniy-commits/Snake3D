@@ -1,4 +1,7 @@
-﻿using Snake3D;
+﻿//Назначение: собрать всё вместе: создать вьюпорт и игру, гонять кадровый цикл,
+//раздавать ввод (клавиатура — WPF, мышь — WinForms), обновлять HUD.
+
+using Snake3D;
 using System;
 using System.Windows;
 using System.Windows.Controls;
@@ -12,25 +15,34 @@ using MouseEventArgs = System.Windows.Input.MouseEventArgs;
 using MouseWheelEventArgs = System.Windows.Input.MouseWheelEventArgs;
 using Point = System.Windows.Point;
 // Явные алиасы против конфликта WinForms ↔ WPF
+using WF = System.Windows.Forms;
 using UserControl = System.Windows.Controls.UserControl;
 
 namespace Snake3D
 {
     public partial class SnakeView : Window
     {
+        //_viewport, _game — объекты, созданные в Loaded.Nullable(?), потому что до
+        //Loaded их нет.
+        //_lastFrameTime — время прошлого кадра для расчёта dt.
+        //_rotating, _winLastPos — состояние перетаскивания камеры мышью.
+        //_timer, _renderTimer, _lastRender, _uptime — остатки старой схемы
+        //(отдельный таймер рендера): после перехода на единый
+        //CompositionTarget.Rendering не используются и подлежат удалению.
+
         private SnakeViewport? _viewport;
         private SnakeGame? _game;
-        private DispatcherTimer? _timer;
-        private DispatcherTimer? _renderTimer;
-        private DateTime _lastRender = DateTime.MinValue;
+        //private DispatcherTimer? _timer;
+        //private DispatcherTimer? _renderTimer;
+        //private DateTime _lastRender = DateTime.MinValue;
         private DateTime _lastFrameTime;
         private readonly System.Diagnostics.Stopwatch _uptime = System.Diagnostics.Stopwatch.StartNew();
         private HudOverlay? _hud;
         private DateTime _lastHudUpdate = DateTime.MinValue;
-        private bool _isDragging;
-        private Point _lastMousePos;
-        private HudOverlay? _hub;
 
+        //Мышь
+        private bool _rotating;
+        private Point _winLastPos;
 
         public SnakeView()
         {
@@ -41,6 +53,33 @@ namespace Snake3D
             Unloaded += SnakeView_Unloaded;
             //MessageBox.Show("C. После подписки на события");
         }
+
+        //Порядок инициализации важен и всегда одинаков:
+        //Создать SnakeViewport и вложить в WindowsFormsHost — только после этого у
+        //контрола появится HWND и OCCT сможет инициализироваться(OnHandleCreated).
+
+        //InitializeGameScene — нарисовать сетку, подогнать камеру.
+
+        //Создать SnakeGame — конструктор загрузит
+        //STEP-модели(голова, хвост, кристалл, мина) один раз.
+
+        //Подписаться на ScoreChanged/GameOver — события из логики приходят из
+        //игрового потока, поэтому внутри подписок стоит
+        //Dispatcher.Invoke — принудительный переход в UI-поток для обращения
+        //к WPF-элементам (ScoreText, StatusText).
+
+        //SetBackgroundColor — фон сцены.
+
+        //Reset() + Start() — построить сцену и запустить игру.
+
+        //Подписать мышь на WinForms-события контрола (airspace!), клавиатуру — на WPF.
+
+        //CompositionTarget.Rendering += OnFrame — единый кадровый цикл:
+        //WPF вызывает обработчик на каждом кадре композитора
+        //(синхронно с частотой монитора, ~60 Гц).
+
+        //Создать HudOverlay и следить за перемещением/размером окна,
+        //чтобы оверлей ехал вместе с вьюпортом.
 
         private void SnakeView_Loaded(object sender, RoutedEventArgs e)
         {
@@ -65,12 +104,21 @@ namespace Snake3D
                     Dispatcher.Invoke(() => StatusText.Text = "Игра окончена! SPACE — рестарт");
 
                 // 4. Фон
-                _viewport.Proxy!.SetBackgroundColor(30, 30, 46);
+                //_viewport.Proxy!.SetBackgroundColor(30, 30, 46);
+                _viewport.Proxy!.SetBackgroundColor(25, 25, 112);
 
                 // 5. Сброс игры: рисует змею+еду, затем InitialFit()
                 //    InitialFit теперь сработает по сетке+змея+еда вместе
                 _game.Reset();
                 _game.Start();
+
+                // Мышь: слушаем WinForms-события контрола вьюпорта
+                // WPF PreviewMouse* над областью WindowsFormsHost не срабатывают
+                // (airspace: ввод уходит напрямую в нативный HWND OCCT).
+                _viewport!.MouseDown    += Viewport_WinMouseDown;
+                _viewport.MouseMove     += Viewport_WinMouseMove;
+                _viewport.MouseUp       += Viewport_WinMouseUp;
+                _viewport.MouseWheel    += Viewport_WinMouseWheel;
 
                 // Единый кадровый цикл
                 _lastFrameTime = DateTime.UtcNow;
@@ -87,10 +135,7 @@ namespace Snake3D
                 // 7. События мыши/клавиатуры
                 PreviewKeyDown += SnakeView_PreviewKeyDown;
                 PreviewKeyUp += SnakeView_PreviewKeyUp;
-                PreviewMouseDown += SnakeView_PreviewMouseDown;
-                PreviewMouseMove += SnakeView_PreviewMouseMove;
-                PreviewMouseUp += SnakeView_PreviewMouseUp;
-                PreviewMouseWheel += SnakeView_PreviewMouseWheel;
+                
                 Closed += (s, ev) => { _hud?.Close(); _hud = null; };
             }
             catch (Exception ex)
@@ -144,14 +189,18 @@ namespace Snake3D
                 case Key.S: case Key.Down: _game.ReleaseTurn(4); break;
             }
         }
-        //private void OnRenderFrameRendering(object? sender, EventArgs e)
-        //{
-        //    // не чаще ~30 кадров в секунду, чтобы не перегружать Redraw
-        //    if ((DateTime.UtcNow - _lastRender).TotalMilliseconds < 30) return;
-        //    _lastRender = DateTime.UtcNow;
 
-        //    OnRenderFrame();
-        //}
+
+        //Считает реальное время кадра и передаёт его в игру.
+        //Внутри Frame идёт разбор на фиксированные логические тики(20 Гц)
+        //плюс рендер каждый кадр.
+
+        //Ограничитель dt > 0.5 защищает от «прыжка во времени»
+        //после сна системы или сворачивания окна: без него аккумулятор логики
+        //получил бы полминуты сразу и змейка мгновенно врезалась бы в стену.
+
+        //HUD обновляется не каждый кадр, а раз в ~30 мс — проекция 50 кристаллов
+        //в пиксели дешевле частоты кадров не требует.
 
         private void OnFrame(object? sender, EventArgs e)
         {
@@ -174,6 +223,14 @@ namespace Snake3D
             }
         }
 
+        //UpdateHudVisuals — содержимое оверлея:
+        //в режиме обзора прицел скрыт, маркеры пустые;
+
+        //в кабине для каждого кристалла вызывается
+        //Proxy.ProjectToScreen(x, y, z, ...) — проекция 3D-точки в пиксели вьюпорта.
+        //Точка показывается, только если она перед камерой (inFront) и внутри
+        //прямоугольника экрана.Координата sy приходят из OCCT с origin
+        //в нижнем углу, поэтому в WPF её переворачивают: ys.Add(h - sy).
         private void UpdateHudVisuals()
         {
             if (_hud == null) return;
@@ -181,11 +238,11 @@ namespace Snake3D
             bool cockpit = _viewport?.Proxy != null && _viewport.Proxy.IsCockpitView();
             _hud.ShowCrosshair(cockpit);
 
-            if (!cockpit)
-            {
-                _hud.PlaceCrystal(null, 0);
-                return;
-            }
+            //if (!cockpit)
+            //{
+            //    _hud.PlaceCrystal(null, 0);
+            //    return;
+            //}
 
             var crystals = _game.Crystals;
             var xs = new List<double?>();
@@ -215,6 +272,10 @@ namespace Snake3D
             _hud.UpdateCrystalMarkers(xs, ys);
         }
 
+        //UpdateHudPlacement — геометрическая привязка оверлея:
+        //ViewportHost.PointToScreen переводит верхний левый угол хоста
+        //в экранные координаты, оверлей(отдельное безрамочное окно)
+        //ставится точно поверх.Вызывается при LocationChanged и SizeChanged.
         private void UpdateHudPlacement()
         {
             if (_hud == null) return;
@@ -226,39 +287,55 @@ namespace Snake3D
             _hud.PlaceCrosshair(ViewportHost.ActualWidth / 2, ViewportHost.ActualHeight / 2);
         }
 
-        private void SnakeView_PreviewMouseDown(object sender, MouseButtonEventArgs e)
-        {
-            _isDragging = true;
-            _lastMousePos = e.GetPosition(this);
-            if (e.ChangedButton == MouseButton.Left && _viewport?.Proxy != null)
-                _viewport.Proxy.StartRotate((int)_lastMousePos.X, (int)_lastMousePos.Y);
-        }
-
-        private void SnakeView_PreviewMouseMove(object sender, MouseEventArgs e)
-        {
-            if (!_isDragging || _viewport?.Proxy == null) return;
-            var pos = e.GetPosition(this);
-            int x = (int)pos.X;
-            int y = (int)pos.Y;
-
-            if (e.LeftButton == MouseButtonState.Pressed)
-                _viewport.Proxy.Rotate(x, y);
-            else if (e.MiddleButton == MouseButtonState.Pressed)
-                _viewport.Proxy.Pan(x - (int)_lastMousePos.X, y - (int)_lastMousePos.Y);
-
-            _lastMousePos = pos;
-        }
-
-        private void SnakeView_PreviewMouseUp(object sender, MouseButtonEventArgs e)
-        {
-            _isDragging = false;
-        }
-
-        private void SnakeView_PreviewMouseWheel(object sender, MouseWheelEventArgs e)
+        //мышь на WinForms-события
+        private void Viewport_WinMouseDown(object sender, WF.MouseEventArgs e)
         {
             if (_viewport?.Proxy == null) return;
-            int delta = e.Delta > 0 ? 10 : -10;
-            _viewport.Proxy.Zoom(100, 100, 100 + delta, 100);
+
+            // MouseWheel в WinForms уходит только контролу в фокусе
+            _viewport.Focus();
+
+            if (e.Button == WF.MouseButtons.Left)
+            {
+                _rotating = true;
+                if (_game != null) _game.SuppressCamera = true;
+
+                int vy = _viewport.Height - e.Y;   // OCCT: ось Y снизу вверх
+                _viewport.Proxy.StartRotate(e.X, vy);
+            }
+        }
+
+        private void Viewport_WinMouseMove(object sender, WF.MouseEventArgs e)
+        {
+            if (_viewport?.Proxy == null || !_rotating) return;
+
+            int vx = e.X;
+            int vy = _viewport.Height - e.Y;
+
+            if (e.Button == WF.MouseButtons.Left)
+            {
+                _viewport.Proxy.Rotate(vx, vy);
+            }
+            else if (e.Button == WF.MouseButtons.Middle)
+            {
+                // Pan: смещение в координатах OCCT — по Y знак переворачивается
+                _viewport.Proxy.Pan(e.X - (int)_winLastPos.X, (int)_winLastPos.Y - e.Y);
+            }
+
+            _winLastPos = new Point(e.X, e.Y);
+        }
+
+        private void Viewport_WinMouseUp(object sender, WF.MouseEventArgs e)
+        {
+            _rotating = false;
+            if (_game != null) _game.SuppressCamera = false;
+        }
+
+        private void Viewport_WinMouseWheel(object sender, WF.MouseEventArgs e)
+        {
+            if (_viewport?.Proxy == null) return;
+            double factor = e.Delta > 0 ? 1.1 : 1.0 / 1.1;
+            _viewport.Proxy.ZoomBy(factor);
         }
 
         private void SnakeView_Unloaded(object sender, RoutedEventArgs e)
@@ -269,3 +346,21 @@ namespace Snake3D
         }
     }
 }
+
+
+//Почему мышь «мёртвая»
+//1. Airspace (главная причина). ViewportHost.Child = _viewport и комментарий про
+//«конфликт WinForms ↔ WPF» говорят, что OCCT рисуется в нативном HWND,
+//вставленном через WindowsFormsHost. Классическое ограничение WPF: над областью,
+//занятой чужим HWND, ввод уходит напрямую в WinForms-контрол — WPF-события
+//PreviewMouseDown/Move/Up/Wheel на окне там просто не срабатывают.
+//Поэтому клавиши работают (фокус у окна), а мышь — нет.
+
+//2. FollowHead затирает камеру. SnakeGame.Render() вызывает _proxy.FollowHead(0)
+//в каждом кадре: даже если бы поворот сработал, следящий кадр тут же перезаписал
+//бы eye/center/up.
+
+//3. Конвенции координат. WinForms отдаёт e.Y сверху вниз, OCCT ждёт ось Y снизу
+//вверх — без переворота вращение и панорама поедут «вверх ногами». А старый зум
+//через Zoom(100,100,110,100) к тому же не различает направление колеса
+//(используется только длина вектора).

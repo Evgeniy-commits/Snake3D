@@ -103,6 +103,11 @@ namespace Snake3D
         public bool IsRunning { get; private set; }
         public bool IsPaused { get; private set; }
 
+        // Пока пользователь крутит камеру мышью, автослёжку отключаем:
+        // FollowHead() в каждом кадре перезаписывает eye/center/up
+        // и поворот камеры не видно.
+        public bool SuppressCamera { get; set; }
+
         public event EventHandler<int>? ScoreChanged;
         public event EventHandler? GameOver;
 
@@ -695,7 +700,8 @@ namespace Snake3D
             }
 
 
-            _proxy.FollowHead(0);
+            if (!SuppressCamera)
+                _proxy.FollowHead(0);
         }
 
         private void UpdateSmoothTurn()

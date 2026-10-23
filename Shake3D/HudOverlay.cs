@@ -1,4 +1,13 @@
-﻿using System;
+﻿//Назначение: показать прицел и маркеры кристаллов поверх 3D-сцены.
+
+//Почему это отдельное окно, а не WPF-элементы на главном окне:
+//из - за того же airspace. Нативный HWND OCCT всегда рисуется поверх любых
+//WPF-элементов главного окна — прицел и точки в нём бы просто не были видны.
+//Решение — второе окно с AllowsTransparency = true и Topmost = true,
+//целиком прозрачное, кроме нарисованных элементов.
+//Оно живёт своей жизнью и синхронизируется вручную (UpdateHudPlacement).
+
+using System;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
@@ -25,6 +34,17 @@ namespace Snake3D
 
             Content = _canvas;
 
+        //Элементы:
+            //_crosshair(Path) — прицел: четыре штриха, нарисованные геометрией
+            //M 0,-18 V - 6 M 0,6 V18 M -18,0 H - 6 M 6,0 H18.
+            //Позиция меняется через TranslateTransform(PlaceCrosshair),
+            //показ / скрытие — ShowCrosshair(виден только в кабине).
+
+            //_crystalDot — одиночный маркер(наследие старой логики «один кристалл»,
+            //сейчас не используется — кандидат на удаление вместе с PlaceCrystal).
+
+            //_crystalDots(List<Ellipse>) — пул маркеров для всех кристаллов.
+
             // Прицел по центру
             _crosshair = new Path
             {
@@ -38,15 +58,15 @@ namespace Snake3D
             _canvas.Children.Add(_crosshair);
 
             // Маркер кристалла
-            _crystalDot = new Ellipse
-            {
-                Width = 16,
-                Height = 16,
-                Stroke = System.Windows.Media.Brushes.Orange,
-                StrokeThickness = 2,
-                Visibility = Visibility.Collapsed
-            };
-            _canvas.Children.Add(_crystalDot);
+            //_crystalDot = new Ellipse
+            //{
+            //    Width = 16,
+            //    Height = 16,
+            //    Stroke = System.Windows.Media.Brushes.Orange,
+            //    StrokeThickness = 2,
+            //    Visibility = Visibility.Collapsed
+            //};
+            //_canvas.Children.Add(_crystalDot);
         }
 
         public void ShowCrosshair(bool show)
@@ -62,18 +82,22 @@ namespace Snake3D
         }
 
         // x == null — маркер скрыт (кристалл вне экрана/сзади)
-        public void PlaceCrystal(double? x, double y)
-        {
-            if (x == null)
-            {
-                _crystalDot!.Visibility = Visibility.Collapsed;
-                return;
-            }
-            _crystalDot!.Visibility = Visibility.Visible;
-            Canvas.SetLeft(_crystalDot, x.Value - _crystalDot.Width / 2);
-            Canvas.SetTop(_crystalDot, y - _crystalDot.Height / 2);
-        }
+        //public void PlaceCrystal(double? x, double y)
+        //{
+        //    if (x == null)
+        //    {
+        //        _crystalDot!.Visibility = Visibility.Collapsed;
+        //        return;
+        //    }
+        //    _crystalDot!.Visibility = Visibility.Visible;
+        //    Canvas.SetLeft(_crystalDot, x.Value - _crystalDot.Width / 2);
+        //    Canvas.SetTop(_crystalDot, y - _crystalDot.Height / 2);
+        //}
 
+        //UpdateCrystalMarkers(xs, ys) — синхронизирует пул точек со списком
+        //проекций: недостающие создаёт, лишние убирает, xs[i] == null —
+        //кристалл вне экрана или за камерой, маркер скрыт.Позиция через
+        //Canvas.SetLeft/SetTop с центровкой(минус половина размера точки).
         public void UpdateCrystalMarkers(IReadOnlyList<double?> xs, IReadOnlyList<double> ys)
         {
             while (_crystalDots.Count < xs.Count)
