@@ -520,7 +520,10 @@ namespace Snake3D
                     _crystals.RemoveAt(i);
 
                     if (_mode == GameMode.FreeHunt)
-                        EnsureCrystals();                        // охота: поле пополняется, как раньше
+                    {
+                        EnsureCrystals();      // охота: поле кристаллов пополняется, как раньше
+                        SpawnMines(1);         // охота: каждый съеденный кристалл добавляет одну мину
+                    }                      
                     else
                         SpawnMines(GameConfig.MinesPerCristal);  // миссия: расплата минами
 

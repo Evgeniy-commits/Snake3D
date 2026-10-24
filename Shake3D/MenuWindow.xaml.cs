@@ -23,6 +23,7 @@ namespace Snake3D
         private readonly bool _pauseMode;
         public MenuWindow(bool pauseMode = false)
         {
+            DarkTitle.Apply(this);
             InitializeComponent();
 
             _pauseMode = pauseMode;
@@ -42,6 +43,8 @@ namespace Snake3D
                 else Close();                                              // в главном меню — просто закрыть
             };
 
+            OptSpeed.ValueChanged += (s, e) =>
+                SpeedLabel.Text = $"{OptSpeed.Value:0} x множитель";
             OptArena.ValueChanged += (s, e) =>
                 ArenaLabel.Text = $"{OptArena.Value:0} в стороне";
             OptGrid.ValueChanged += (s, e) =>

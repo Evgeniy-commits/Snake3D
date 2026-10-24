@@ -54,12 +54,11 @@ namespace Snake3D
 
         public SnakeView()
         {
-            //MessageBox.Show("A. До InitializeComponent");
+            DarkTitle.Apply(this);
             InitializeComponent();
-            //MessageBox.Show("B. После InitializeComponent");
             Loaded += SnakeView_Loaded;
             Unloaded += SnakeView_Unloaded;
-            //MessageBox.Show("C. После подписки на события");
+            
         }
 
         //Порядок инициализации важен и всегда одинаков:
@@ -98,6 +97,9 @@ namespace Snake3D
 
                 _viewport = new SnakeViewport();
                 ViewportHost.Child = _viewport;
+
+                try { _viewport.Proxy?.SetBackgroundColor(2, 2, 5); }   // тёмный космос СРАЗУ
+                catch { }
 
                 // Меню — НЕ в Loaded: окно ещё не показано, ShowDialog падает
                 // с InvalidOperationException (EnsureHandle после закрытия окна).
@@ -164,6 +166,7 @@ namespace Snake3D
                 _game.ApplyOptions(opt);
                 _game.Reset();
                 _viewport.Proxy!.FitScene();
+                _viewport.Proxy!.SetBackgroundColor(2, 2, 5);
                 _viewport.Proxy!.SetViewMode(opt.CockpitView ? 1 : 0);
                 //_game.Start();
                 StatusText.Text = "Space - старт";
@@ -227,7 +230,7 @@ namespace Snake3D
                     {
                         _finished = false;
                         _game.Reset();
-                        _viewport?.Proxy?.FitScene();
+                        _viewport?.Proxy?.FitScene();                        
                         _game.Start();
                         StatusText.Text = "Идёт игра!";
                     }
@@ -288,7 +291,7 @@ namespace Snake3D
                             _finished = false;
                             _game.ApplyOptions(menu.Options);
                             _game.Reset();
-                            _viewport?.Proxy?.FitScene();
+                            _viewport?.Proxy?.FitScene();                           
                             _viewport.Proxy!.SetViewMode(menu.Options.CockpitView ? 1 : 0);
                             StatusText.Text = "Space — старт";
                         }

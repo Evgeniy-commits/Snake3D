@@ -9,6 +9,7 @@ namespace Snake3D
     {
         public HighScoresWindow()
         {
+            DarkTitle.Apply(this);
             InitializeComponent();
             Tab_Checked(null, null!);   // заполнить таблицу сразу при открытии
         }

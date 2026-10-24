@@ -3,7 +3,8 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="Snake 3D" Height="800" Width="1000"
         Background="#1E1E2E"
-        WindowStartupLocation="CenterScreen">
+        WindowStartupLocation="CenterScreen"
+		Icon="/image/Logo.png">
 	<Grid>
 		<Grid.RowDefinitions>
 			<RowDefinition Height="Auto"/>
@@ -11,14 +12,28 @@
 			<RowDefinition Height="Auto"/>
 		</Grid.RowDefinitions>
 
-		<StackPanel Grid.Row="0"
-                    HorizontalAlignment="Left"
-                    Margin="10" Orientation="Horizontal">
-			<TextBlock Text="Счёт: " Foreground="White" FontSize="18" FontWeight="Bold"/>
-			<TextBlock x:Name="ScoreText" Text="0" Foreground="#7EE787" FontSize="18" FontWeight="Bold"/>
-			<TextBlock x:Name="ProgressText" Text="" Foreground="#7ED6E7" FontSize="18" FontWeight="Bold" Margin="24,0,0,0"/>
-			<TextBlock x:Name="TimeText" Text="00:00" Foreground="#9A9A9A" FontSize="18" Margin="24,0,0,0"/>
-		</StackPanel>
+		<Border Grid.Row="0"
+				HorizontalAlignment="Left"
+				VerticalAlignment="Top"
+				Margin="10"
+				Background="#991A1E38"
+				BorderBrush="#5A6B9E"
+				BorderThickness="1"
+				CornerRadius="8"
+				Padding="14,8">	
+			<Border.Effect>
+				<DropShadowEffect Color="#3A4E8C" BlurRadius="10" ShadowDepth="2" Opacity="0.5"/>
+			</Border.Effect>
+			<StackPanel Orientation="Horizontal">
+				<TextBlock Text="Счёт: " Foreground="#9AA6C8" FontSize="18" FontWeight="SemiBold"/>
+				<TextBlock x:Name="ScoreText" Text="0" Foreground="#8FB0FF" FontSize="18"
+                   FontWeight="Bold" MinWidth="48"/>
+				<TextBlock x:Name="ProgressText" Text="" Foreground="#B48FFF" FontSize="18"
+                   FontWeight="Bold" Margin="24,0,0,0"/>
+				<TextBlock x:Name="TimeText" Text="00:00" Foreground="#7E8AB0" FontSize="18"
+                   Margin="24,0,0,0"/>
+			</StackPanel>
+		</Border>
 
 		<WindowsFormsHost x:Name="ViewportHost" 
 						  Grid.Row="1"

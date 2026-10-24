@@ -17,7 +17,18 @@
 
 	<ItemGroup>
 		<ApplicationDefinition Remove="App.xaml" />
+		<None Remove="image\Logo.jpg" />
+		<None Remove="image\Logo.png" />
+		<None Remove="image\Shatl.jpg" />
+		<None Remove="image\space-shuttle.jpg" />
 		<Page Include="App.xaml" />
+	</ItemGroup>
+
+	<ItemGroup>
+	  <Resource Include="image\Logo.jpg" />
+	  <Resource Include="image\Logo.png" />
+	  <Resource Include="image\Shatl.jpg" />
+	  <Resource Include="image\space-shuttle.jpg" />
 	</ItemGroup>
 
 </Project>
