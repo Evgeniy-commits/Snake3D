@@ -160,6 +160,13 @@ namespace Snake3D
         private int _mineCount = GameConfig.DefaultMineCount;
         private int _crystalCount = GameConfig.DefaultCrystalCount;
 
+        //Для замера производительности
+        private readonly System.Diagnostics.Stopwatch _frameWatch = new();
+        private double _frameMsSum;
+        private int _frameCount;
+        private readonly System.Diagnostics.Stopwatch _watch = new();
+        private double _logicMsSum;
+
         public SnakeGame(SnakeSceneProxy proxy, double arenaSize, double gridStep,
                                             double segmentRadius, double foodRadius)
         {
@@ -728,6 +735,9 @@ namespace Snake3D
         //интерполяция.
         public void Frame(double dt)
         {
+            _frameWatch.Restart();
+            _watch.Restart();
+
             if (IsRunning && !IsGameOver && !IsPaused)
             {
                 // плавный поворот — каждый кадр, мгновенный отклик
@@ -758,7 +768,25 @@ namespace Snake3D
 
             _proxy.UpdateSpin(dt); //копим угол только пока игра идёт
 
+            _watch.Stop();
+            _logicMsSum += _watch.Elapsed.TotalMilliseconds;
+            // --- конец замера логики ---
+
+            _watch.Restart();
             Render();
+            _watch.Stop();
+            double tRender = _watch.Elapsed.TotalMilliseconds;
+
+            _frameWatch.Stop();
+            _frameMsSum += _frameWatch.Elapsed.TotalMilliseconds;
+            if (++_frameCount >= 60)   // раз в секунду при 60 FPS
+            {
+                System.Diagnostics.Debug.WriteLine(
+                $"Кадр: {_frameMsSum / _frameCount:F2} мс | логика: {_logicMsSum / _frameCount:F2} | рендер: {tRender:F2} | объекты: {_segments.Count}+{_crystals.Count}+{_mines.Count}");
+                _frameMsSum = 0;
+                _logicMsSum = 0;
+                _frameCount = 0;
+            }
         }
 
         //Каждая позиция сегмента вычисляется как lerp(prev, next, alpha).
@@ -830,9 +858,8 @@ namespace Snake3D
                 }
             }
 
-
-            if (!SuppressCamera)
-                _proxy.FollowHead(0);
+            _proxy.FollowHead(0);
+            _proxy.Redraw();
         }
 
         private void UpdateSmoothTurn()

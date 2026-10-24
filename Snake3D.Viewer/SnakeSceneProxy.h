@@ -136,6 +136,9 @@ namespace Snake3DViewer
 		double _dirX, _dirY, _dirZ;
 		double _upX, _upY, _upZ;
 
+		double _camEyeX = 0, _camEyeY = 0, _camEyeZ = 0;
+		double _camDirX = 0, _camDirY = 1, _camDirZ = 0;
+
 		//Для STEP
 		TopoDS_Shape* _headModel;
 
@@ -1014,6 +1017,10 @@ namespace Snake3DViewer
 
 				gp_Pnt pos = (*_crystalBase)[i];
 
+				// Спящий кристалл (вне конуса камеры): матрицу не трогаем.
+				// Проснувшись, подхватит текущий _spinAngle — отставание максимум кадр.
+				if (!InView(pos.X(), pos.Y(), pos.Z(), 200.0)) continue;
+
 				//Метод SetValues принимает матрицу по строкам.
 				//Первые три столбца — базис локальной системы координат
 				//(куда смотрят локальные X, Y, Z объекта), 
@@ -1027,7 +1034,7 @@ namespace Snake3DViewer
 					rightR.Z(), fwdR.Z(), up.Z(), pos.Z());
 
 				(*_crystals)[i]->SetLocalTransformation(trsf);
-				_aisContext()->Redisplay((*_crystals)[i], Standard_False);
+				//_aisContext()->Redisplay((*_crystals)[i], Standard_False);
 			}
 		}
 
@@ -1558,7 +1565,11 @@ namespace Snake3DViewer
 			cam->SetCenter(gp_Pnt(desiredAtX, desiredAtY, desiredAtZ));
 			cam->SetUp(gp_Dir(_upX, _upY, _upZ));
 
-			_view()->Redraw();
+
+			_camEyeX = newEyeX; _camEyeY = newEyeY; _camEyeZ = newEyeZ;
+			_camDirX = _dirX;   _camDirY = _dirY;   _camDirZ = _dirZ;
+
+			//_view()->Redraw();
 		}
 
 		//Скалярное произведение viewDir · toPoint — это проверка «перед камерой или за ней».
@@ -1703,6 +1714,21 @@ namespace Snake3DViewer
 			(*_shipParts)(id)->SetColor(Quantity_Color(r, g, b, Quantity_TOC_RGB));
 			(*_shipParts)(id)->SetMaterial((Graphic3d_NameOfMaterial)MaterialFromName(mat.c_str()));
 			return true;
+		}
+
+
+		bool InView(double px, double py, double pz, double maxDist)
+		{
+			double dx = px - _camEyeX;
+			double dy = py - _camEyeY;
+			double dz = pz - _camEyeZ;
+			double dist = sqrt(dx * dx + dy * dy + dz * dz);
+
+			if (dist > maxDist) return false;
+			if (dist < 1e-9) return true;
+
+			// cos(70°) ≈ 0.342 — конус с запасом вокруг реального FOV ~60°
+			return (dx * _camDirX + dy * _camDirY + dz * _camDirZ) / dist > 0.342;
 		}
 	};
 }
