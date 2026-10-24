@@ -1505,8 +1505,8 @@ namespace Snake3DViewer
 			if (_viewMode == 1)
 			{
 				// Кабина
-				camBack = 0.9;    // чуть позади центра головы — нос виден внизу экрана
-				camUp = 0.5;    // немного выше оси, видно "капот"
+				camBack = 2.0;    // чуть позади центра головы — нос виден внизу экрана
+				camUp = 1.0;    // немного выше оси, видно "капот"
 				lookAhead = 30.0;   // далеко вперёд — хороший обзор арены
 				fov = 75.0;   // широкое поле зрения
 				lerpSpeed = 1.0;    // быстрый лерп, кабина не отстаёт от поворотов
@@ -1622,7 +1622,7 @@ namespace Snake3DViewer
 
 			if (!_enginePart().IsNull())
 			{
-				const double freq = 2.0;                       // Гц мерцания
+				const double freq = 5.0;                       // Гц мерцания
 				double k = 0.5 + 0.5 * sin(timeSec * 2.0 * M_PI * freq);
 				_enginePart()->SetColor(Quantity_Color(
 					_engineGlowR * (0.55 + 0.45 * k),
@@ -1632,7 +1632,7 @@ namespace Snake3DViewer
 				_enginePart()->SetTransparency(0.2 + 0.3 * k);
 			}
 
-			_aisContext()->UpdateCurrentViewer();
+			//_aisContext()->UpdateCurrentViewer();
 		}
 
 		// Создать часть корабля из уже загруженной модели и поставить на сцену.
