@@ -129,6 +129,18 @@ namespace Snake3D
         public event EventHandler<int>? ScoreChanged;
         public event EventHandler? GameOver;
 
+        //Новое меню
+        private GameMode _mode;                 
+        private int _missionTotal;
+        private double _playTime;
+
+        public GameMode Mode => _mode;
+        public int MissionTotal => _missionTotal;
+        public int MissionLeft => _crystals.Count;
+        public double PlayTime => _playTime;
+
+        public event EventHandler? Victory;
+
         //Плавный поворот
         private const double TurnSpeedRadPerSecond = Math.PI; //90 градусов в секунду
         private double _yawRate = 0.0;
@@ -277,12 +289,22 @@ namespace Snake3D
         // «спавнить, а потом прятать» не нужно нигде.
         public void ApplyOptions(GameOptions o)
         {
+            _mode = o.Mode;
             TapTurnEnabled = o.TapControl;
             SpeedMultiplier = o.Speed;
             SetWalls(o.WallsOn);
 
             _crystalCount = Math.Clamp(o.CrystalCount, 1, GameConfig.MaxCrystalCount);
-            _mineCount = Math.Clamp(o.MinesCount, 0, GameConfig.MaxMineCount);
+            if (_mode == GameMode.Mission)
+            {
+                _mineCount = 0;                       // миссия стартует без мин
+                _missionTotal = _crystalCount;
+            }
+            else
+            {
+                _mineCount = Math.Clamp(o.MinesCount, 0, GameConfig.MaxMineCount);
+                _missionTotal = 0;
+            }
         }
 
         public void SetWalls(bool on)
@@ -295,6 +317,7 @@ namespace Snake3D
 
         public void Reset()
         {
+            _playTime = 0;
             _proxy.ClearScene();
 
             // Арена: стены + сетка пересоздаются после каждой чистки.
@@ -495,7 +518,17 @@ namespace Snake3D
 
                     _proxy.RemoveCrystalAt(i);
                     _crystals.RemoveAt(i);
-                    EnsureCrystals();   // сразу достраиваем до пяти
+
+                    if (_mode == GameMode.FreeHunt)
+                        EnsureCrystals();                        // охота: поле пополняется, как раньше
+                    else
+                        SpawnMines(GameConfig.MinesPerCristal);  // миссия: расплата минами
+
+                    if (_mode == GameMode.Mission && _crystals.Count == 0)
+                    {
+                        TriggerVictory();
+                        return true;
+                    }
                     break;
                 }
             }
@@ -603,6 +636,7 @@ namespace Snake3D
         //интерполяция.
         public void Frame(double dt)
         {
+            _playTime += dt;
             _dtSum += dt;
             _frameWatch.Restart();
             _watch.Restart();
@@ -926,6 +960,22 @@ namespace Snake3D
                 _mines.Add(p);
                 _proxy.AddMineAt(_mines.Count - 1, p.X, p.Y, p.Z, _foodRadius);
             }
+        }
+
+        private void SpawnMines(int count)
+        {
+            for (int k = 0; k < count && _mines.Count < GameConfig.MaxMineCount; k++)
+            {
+                Point3D p = FindFreeSpot();
+                _mines.Add(p);
+                _proxy.AddMineAt(_mines.Count - 1, p.X, p.Y, p.Z, _foodRadius);
+            }
+        }
+
+        private void TriggerVictory()
+        {
+            IsRunning = false;
+            Victory?.Invoke(this, EventArgs.Empty);
         }
 
         private void TriggerGameOver()

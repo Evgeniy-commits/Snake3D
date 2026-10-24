@@ -6,8 +6,10 @@ using System.Threading.Tasks;
 
 namespace Snake3D
 {
+    public enum GameMode { FreeHunt, Mission }
     public class GameOptions
     {
+        public GameMode Mode;
         public bool CockpitView;
         public bool TapControl;
         public bool WallsOn;

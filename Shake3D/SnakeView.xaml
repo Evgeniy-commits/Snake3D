@@ -14,10 +14,10 @@
 		<StackPanel Grid.Row="0"
                     HorizontalAlignment="Left"
                     Margin="10" Orientation="Horizontal">
-			<TextBlock Text="Счёт: " Foreground="White"
-                       FontSize="18" FontWeight="Bold"/>
-			<TextBlock x:Name="ScoreText" Text="0" Foreground="#7EE787"
-                       FontSize="18" FontWeight="Bold"/>
+			<TextBlock Text="Счёт: " Foreground="White" FontSize="18" FontWeight="Bold"/>
+			<TextBlock x:Name="ScoreText" Text="0" Foreground="#7EE787" FontSize="18" FontWeight="Bold"/>
+			<TextBlock x:Name="ProgressText" Text="" Foreground="#7ED6E7" FontSize="18" FontWeight="Bold" Margin="24,0,0,0"/>
+			<TextBlock x:Name="TimeText" Text="00:00" Foreground="#9A9A9A" FontSize="18" Margin="24,0,0,0"/>
 		</StackPanel>
 
 		<WindowsFormsHost x:Name="ViewportHost" 

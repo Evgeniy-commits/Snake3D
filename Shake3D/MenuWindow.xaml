@@ -1,19 +1,44 @@
 ﻿<Window x:Class="Snake3D.MenuWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Snake3D" Height="420" Width="440"
-        WindowStartupLocation="CenterOwner"
-        Background="#1E1E2E">
+        Title="Snake3D" Height="500" Width="500"
+        WindowStartupLocation="CenterOwner">
+	<Window.Background>
+		<ImageBrush ImageSource="image/Shatl.jpg" Stretch="UniformToFill"/>
+	</Window.Background> 
 	<Window.Resources>
 		<!-- Единый стиль зелёных кнопок: цвет совпадает с заголовком -->
 		<Style x:Key="MenuButton" TargetType="Button">
-			<Setter Property="Background" Value="#33D17A"/>
-			<Setter Property="Foreground" Value="#101828"/>
+			<Setter Property="Background" Value="#B333D17A"/>
+			<!-- 70% прозрачности зелёного -->
+			<Setter Property="Foreground" Value="#E6E6F0"/>
+			<!-- текст светлее: на тёмном фото тёмный текст исчезнет -->
 			<Setter Property="FontSize" Value="18"/>
 			<Setter Property="FontWeight" Value="SemiBold"/>
 			<Setter Property="Height" Value="38"/>
 			<Setter Property="Margin" Value="0,12,0,0"/>
 			<Setter Property="Cursor" Value="Hand"/>
+			<Setter Property="BorderBrush" Value="#33D17A"/>
+			<Setter Property="BorderThickness" Value="1"/>
+
+			<Setter Property="Effect">
+				<Setter.Value>
+					<DropShadowEffect Color="#000000" BlurRadius="10"
+                              ShadowDepth="3" Opacity="0.55"/>
+				</Setter.Value>
+			</Setter>
+
+			<Style.Triggers>
+				<Trigger Property="IsMouseOver" Value="True">
+					<Setter Property="Background" Value="#E633D17A"/>
+					<!-- наведение: почти сплошной -->
+					<Setter Property="Foreground" Value="#101828"/>
+				</Trigger>
+				<Trigger Property="IsPressed" Value="True">
+					<Setter Property="Background" Value="#28B463"/>
+					<Setter Property="Foreground" Value="#101828"/>
+				</Trigger>
+			</Style.Triggers>
 		</Style>
 	</Window.Resources>
 
@@ -22,8 +47,12 @@
                    Foreground="#33D17A" HorizontalAlignment="Center"
                    Margin="0,8,0,8"/>
 
-		<Button x:Name="BtnStart" Content="Начать игру"
-                Style="{StaticResource MenuButton}" Click="BtnStart_Click"/>
+		<Button x:Name="BtnContinue" Content="Продолжить" 
+				Style="{StaticResource MenuButton}" Click="BtnContinue_Click"/>
+		<Button x:Name="BtnHunt" Content="Свободная охота" 
+				Style="{StaticResource MenuButton}" Click="BtnHunt_Click"/>
+		<Button x:Name="BtnMission" Content="Миссия" 
+				Style="{StaticResource MenuButton}" Click="BtnMission_Click"/>
 
 		<!-- «Опции» — обычная кнопка: по клику открывает Popup под собой -->
 		<Button x:Name="BtnOptions" Content="Опции"
@@ -73,6 +102,8 @@
 			</Border>
 		</Popup>
 
+		<Button x:Name="BtnScores" Content="Рекорды" 
+				Style="{StaticResource MenuButton}" Click="BtnScores_Click"/>
 		<Button x:Name="BtnExit" Content="Выход"
                 Style="{StaticResource MenuButton}" Click="BtnExit_Click"/>
 	</StackPanel>

@@ -23,6 +23,7 @@ namespace Snake3D
         public const double BaseCellsPerSecond = 12.5;
         public const double StepLength = 1.0;
         public const double BaseStepsPerSecond = 15.0;
+        public const int MinesPerCristal = 3;
 
 
         public static class Ship

@@ -39,6 +39,9 @@ namespace Snake3D
         private HudOverlay? _hud;
         private DateTime _lastHudUpdate = DateTime.MinValue;
         private bool _menuHandled = false;
+        private bool _finished;
+        private bool _runSaved;
+        private bool _markersOn = false;
 
         //Мышь
         private bool _rotating;
@@ -130,12 +133,32 @@ namespace Snake3D
 
                 // 3. События логики приходят из кадрового цикла — в UI-поток через Dispatcher
                 _game.ScoreChanged += (s, score) =>
-                    Dispatcher.Invoke(() => ScoreText.Text = score.ToString());
-                _game.GameOver += (s, ev) =>
-                    Dispatcher.Invoke(() => StatusText.Text = "Игра окончена! SPACE — рестарт");
+                    Dispatcher.Invoke(() =>
+                    {
+                        ScoreText.Text = score.ToString();
+                        ProgressText.Text = _game!.Mode == GameMode.Mission
+                            ? $"Кристаллы: {_game.MissionLeft}/{_game.MissionTotal}"
+                            : $"Кристаллы: {_game.Crystals.Count}";
+                    });
 
-                // 4. Фон почти чёрный, с холодным оттенком — звёзды проступают
-                _viewport.Proxy!.SetBackgroundColor(5, 5, 10);
+                _game.GameOver += (s, ev) =>
+                    Dispatcher.Invoke(() =>
+                    {
+                        _finished = true;                 // чтобы Space сделал рестарт, а не Start()
+                        SaveRun();                        // рекорд пишется при любом исходе
+                        StatusText.Text = "Игра окончена! SPACE — рестарт";
+                    });
+
+                _game.Victory += (s, ev) => Dispatcher.Invoke(() =>
+                {
+                    _finished = true;
+                    SaveRun();
+                    var t = TimeSpan.FromSeconds(_game!.PlayTime);
+                    StatusText.Text = $"Миссия выполнена! Очки: {_game.Score}  Время: {t.Minutes:00}:{t.Seconds:00}  SPACE — заново";
+
+                    // 4. Фон почти чёрный, с холодным оттенком — звёзды проступают
+                    _viewport.Proxy!.SetBackgroundColor(5, 5, 10);
+                });
 
                 // 5. Опции ДО Reset: сцена строится сразу с учётом выбора (мины, кристаллы, стены)
                 _game.ApplyOptions(opt);
@@ -173,6 +196,22 @@ namespace Snake3D
                 MessageBox.Show(ex.ToString(), "Ошибка в меню");
             }
         }
+        private void SaveRun()
+        {
+            if (_runSaved || _game == null) return;
+            _runSaved = true;
+            HighScoreStore.Add
+            (
+                new HighScoreEntry
+                {
+                    Mode = _game.Mode.ToString(),
+                    Score = _game.Score,
+                    Seconds = _game.PlayTime,
+                    Date = DateTime.Now.ToString("yyyy-MM-dd HH:mm")
+                }
+            );
+        }
+
         private void BtnExit_Click(object sender, RoutedEventArgs e)
         {
             DialogResult = false;   // ShowMenu увидит false и сам закроет главное окно
@@ -184,8 +223,9 @@ namespace Snake3D
             switch (e.Key)
             {
                 case Key.Space:
-                    if (_game.IsGameOver)
+                    if (_game.IsGameOver || _finished)
                     {
+                        _finished = false;
                         _game.Reset();
                         _viewport?.Proxy?.FitScene();
                         _game.Start();
@@ -202,7 +242,7 @@ namespace Snake3D
                 case Key.W: case Key.Up: _game.StartTurn(3); break;
                 case Key.S: case Key.Down: _game.StartTurn(4); break;
                 case Key.E:
-                    if (e.IsRepeat) break;              
+                    if (e.IsRepeat) break;
                     _viewport?.Proxy?.ToggleViewMode();
                     break;
                 case Key.P:
@@ -222,6 +262,49 @@ namespace Snake3D
                         ? "Режим: без стен — границу показывает подсветка"
                         : "Стены: ВКЛ";
                     break;
+                case Key.Escape:
+                    if (e.IsRepeat) break;
+                    if (_game == null) break;
+
+                    bool canMenu = !_game.IsGameOver && !_finished;   // после конца партии меню не нужно
+
+                    if (canMenu && _game.IsRunning && !_game.IsPaused)
+                    {
+                        _game.TogglePause();                          // паузим, если игра шла
+                    }
+
+                    if (canMenu)
+                    {
+                        // игра ещё не стартовала — показываем полное меню (можно выбрать режим),
+                        // на паузе — меню паузы (кнопка «Продолжить»)
+                        bool paused = _game.IsPaused;
+                        var menu = new MenuWindow(pauseMode: paused) { Owner = this };
+                        menu.ShowDialog();
+
+                        if (menu.DialogResult == true && !paused)
+                        {
+                            // выбрали режим прямо из Esc-меню до старта: готовим партию,
+                            // но НЕ запускаем — старт по Space
+                            _finished = false;
+                            _game.ApplyOptions(menu.Options);
+                            _game.Reset();
+                            _viewport?.Proxy?.FitScene();
+                            _viewport.Proxy!.SetViewMode(menu.Options.CockpitView ? 1 : 0);
+                            StatusText.Text = "Space — старт";
+                        }
+                        else
+                        {
+                            // «Продолжить», Esc в меню или крестик — остаёмся на паузе
+                            StatusText.Text = "Пауза — SPACE чтобы продолжить";
+                        }
+                    }
+                    break;
+                case Key.F:
+                    if (e.IsRepeat) break;
+                    _markersOn = !_markersOn;
+                    StatusText.Text = _markersOn ? "Маркеры: ВКЛ" : "Маркеры: ВЫКЛ";
+                    break;
+
             }
         }
 
@@ -270,6 +353,9 @@ namespace Snake3D
             {
                 _lastHudUpdate = DateTime.UtcNow;
                 UpdateHudVisuals(); // содержимое бывшего OnRenderFrame после _game.Render()
+
+                var t = TimeSpan.FromSeconds(_game.PlayTime);
+                TimeText.Text = $"{t.Minutes:00}:{t.Seconds:00}";
             }
 
             _onFrameWatch.Stop();
@@ -297,11 +383,11 @@ namespace Snake3D
             bool cockpit = _viewport?.Proxy != null && _viewport.Proxy.IsCockpitView();
             _hud.ShowCrosshair(cockpit);
 
-            //if (!cockpit)
-            //{
-            //    _hud.PlaceCrystal(null, 0);
-            //    return;
-            //}
+            if (!_markersOn)   // маркеры выключены — очищаем и выходим
+            {
+                _hud.UpdateCrystalMarkers(new List<double?>(), new List<double>());
+                return;
+            }
 
             var crystals = _game.Crystals;
             var xs = new List<double?>();

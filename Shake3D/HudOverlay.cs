@@ -10,6 +10,7 @@
 using System;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Ink;
 using System.Windows.Media;
 using System.Windows.Shapes;
 
@@ -104,10 +105,11 @@ namespace Snake3D
             {
                 var dot = new Ellipse
                 {
-                    Width = 16,
-                    Height = 16,
-                    Stroke = System.Windows.Media.Brushes.Orange,
-                    StrokeThickness = 2,
+                    Width = 28,
+                    Height = 28,
+                    Fill = new SolidColorBrush(System.Windows.Media.Color.FromArgb(70, 0xFF, 0x4C, 0x4C)),  // полупрозрачный красный
+                    Stroke = new SolidColorBrush(System.Windows.Media.Color.FromRgb(0xFF, 0x3B, 0x3B)),      // ярко-красный контур
+                    StrokeThickness = 2.5,
                     Visibility = Visibility.Collapsed
                 };
                 _canvas.Children.Add(dot);
