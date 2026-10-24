@@ -74,7 +74,7 @@ namespace Snake3D
     public class SnakeGame
     {
         private readonly SnakeSceneProxy _proxy;
-        private List<Point3D> _segments;
+        private List<Point3D> _segments;        
        
         //кристаллы
         private readonly List<Point3D> _crystals = new();
@@ -167,7 +167,7 @@ namespace Snake3D
             _segmentRadius = segmentRadius;
             _foodRadius = foodRadius;
             _segments = new List<Point3D>();
-
+            
             // Загрузка модели головы — один раз, до первого Reset()
             bool ok = _proxy.LoadHeadModel(@"C:\Users\Admin\source\repos\Shake3D\models\Shatl.stp", 0.75 * segmentRadius);
             if (!ok)

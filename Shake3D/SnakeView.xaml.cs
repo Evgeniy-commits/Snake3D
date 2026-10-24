@@ -138,7 +138,8 @@ namespace Snake3D
                 _game.Reset();
                 _viewport.Proxy!.FitScene();
                 _viewport.Proxy!.SetViewMode(opt.CockpitView ? 1 : 0);
-                _game.Start();
+                //_game.Start();
+                StatusText.Text = "Space - старт";
 
                 // 6. Мышь — на WinForms-события контрола (airspace: WPF-события
                 //    над нативным HWND не срабатывают). Клавиатура — на WPF.
@@ -179,7 +180,14 @@ namespace Snake3D
             switch (e.Key)
             {
                 case Key.Space:
-                    if (_game.IsGameOver || !_game.IsRunning)
+                    if (_game.IsGameOver)
+                    {
+                        _game.Reset();
+                        _viewport?.Proxy?.FitScene();
+                        _game.Start();
+                        StatusText.Text = "Идёт игра!";
+                    }
+                    else if (!_game.IsRunning)
                     {
                         _game.Start();
                         StatusText.Text = "Идёт игра!";
