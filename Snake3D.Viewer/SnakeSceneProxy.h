@@ -70,6 +70,10 @@
 #include <BRepBuilderAPI_MakePolygon.hxx>
 #include <map>
 
+//Для модельки корабля
+#include <NCollection_DataMap.hxx>
+#include <gp_Trsf.hxx>
+
 #include <msclr/marshal_cppstd.h>
 
 #pragma comment(lib, "TKernel.lib")
@@ -110,6 +114,12 @@ namespace Snake3DViewer
 		// Направленный свет «солнце» — сверху-позади-сбоку относительно корабля.
 		// Направление обновляется в SetOrientation вместе с курсом змейки.
 		NCollection_Haft<Handle(V3d_DirectionalLight)> _sunLight;
+
+		// Корабль: части, их подгоночные трансформации, индекс двигателя
+		NCollection_DataMap<int, Handle(AIS_Shape)>* _shipParts;
+		NCollection_DataMap<int, gp_Trsf>*            _fitTrsf;
+		NCollection_Haft<Handle(AIS_Shape)> _enginePart;
+		double _engineGlowR = 0.30, _engineGlowG = 0.55, _engineGlowB = 1.0;
 		
 		// Нативные указатели на векторы 
 		std::vector<Handle(AIS_Shape)>* _snakeSegments;
@@ -179,6 +189,25 @@ namespace Snake3DViewer
 			_aisContext()->Display(aisShape, Standard_True);
 		}
 
+		// Кадр (позиция + forward + up) → gp_Trsf. Общий для головы (MoveHead)
+		// и корабля (PlaceShip): локальный X — right, Y — forward, Z — up.
+		gp_Trsf TrsfFromFrame(double x, double y, double z,
+			double fx, double fy, double fz,
+			double ux, double uy, double uz)
+		{
+			gp_Dir fwd(fx, fy, fz);
+			gp_Dir up(ux, uy, uz);
+			gp_Dir right(fwd.Crossed(up));
+			up = gp_Dir(right.Crossed(fwd));
+
+			gp_Trsf trsf;
+			trsf.SetValues(
+				right.X(), fwd.X(), up.X(), x,
+				right.Y(), fwd.Y(), up.Y(), y,
+				right.Z(), fwd.Z(), up.Z(), z);
+			return trsf;
+		}
+
 	public:
 		//Доступ через скобки: _viewer() = new V3d_Viewer(...) — 
 		//это разыменование хафта (получение ссылки на сам Handle).
@@ -207,6 +236,8 @@ namespace Snake3DViewer
 			_upX = 0.0;   _upY = 0.0;   _upZ = 1.0;
 
 			_headModel = nullptr;
+			_shipParts = new NCollection_DataMap<int, Handle(AIS_Shape)>();
+			_fitTrsf = new NCollection_DataMap<int, gp_Trsf>();
 		}
 
 		//Под капотом:
@@ -247,6 +278,8 @@ namespace Snake3DViewer
 			delete _mines;         _mines = nullptr;
 			delete _mineBase;      _mineBase = nullptr;
 			delete _segmentDirs;   _segmentDirs = nullptr;
+			delete _shipParts;	   _shipParts = nullptr;
+			delete _fitTrsf;	   _fitTrsf = nullptr;
 		}
 
 		!SnakeSceneProxy()
@@ -269,6 +302,8 @@ namespace Snake3DViewer
 			delete _mines;         _mines = nullptr;
 			delete _mineBase;      _mineBase = nullptr;
 			delete _segmentDirs;   _segmentDirs = nullptr;
+			delete _shipParts;	   _shipParts = nullptr;
+			delete _fitTrsf;	   _fitTrsf = nullptr;
 		}
 
 		TopoDS_Shape* GetModel(int kind)
@@ -284,7 +319,7 @@ namespace Snake3DViewer
 		//арены.
 		bool LoadStepModel(System::String^ path, int kind, double targetSize)
 		{
-			if (kind < 0 || kind > 4) return false;
+			if (kind < 0 || kind > 7) return false;
 
 			msclr::interop::marshal_context ctx;
 			std::string nativePath = ctx.marshal_as<std::string>(path);
@@ -335,6 +370,70 @@ namespace Snake3DViewer
 			while ((int)_models->size() <= kind) _models->push_back(nullptr);
 			delete (*_models)[kind];
 			(*_models)[kind] = new TopoDS_Shape(shaped);
+			return true;
+		}
+
+		// Загрузка части корабля БЕЗ нормализации и центрирования.
+		// Части смоделированы в одной сборке: общий масштаб и общий ноль,
+		// поэтому трогаем только единый uniformScale (если вся сборка мала/велика).
+		bool LoadShipPart(System::String^ path, int id, double uniformScale)
+		{
+			msclr::interop::marshal_context ctx;
+			std::string nativePath = ctx.marshal_as<std::string>(path);
+
+			STEPControl_Reader reader;
+			if (reader.ReadFile(nativePath.c_str()) != IFSelect_RetDone) return false;
+			reader.TransferRoots();
+			if (reader.NbShapes() < 1) return false;
+
+			TopoDS_Shape shaped = reader.OneShape();
+
+			// Единый масштаб на ВСЕ части — пропорции сборки сохраняются.
+			// uniformScale = 1.0 — геометрия без изменений.
+			if (std::abs(uniformScale - 1.0) > 1e-9)
+			{
+				gp_Trsf scaler;
+				scaler.SetScale(gp_Pnt(0, 0, 0), uniformScale);
+				shaped = BRepBuilderAPI_Transform(shaped, scaler, Standard_True).Shape();
+			}
+
+			while ((int)_models->size() <= id) _models->push_back(nullptr);
+			delete (*_models)[id];
+			(*_models)[id] = new TopoDS_Shape(shaped);
+			return true;
+		}
+
+		// Центрирует СБОРКУ целиком: общий bbox всех частей → в ноль.
+		// Вращения корабля идут вокруг локального нуля, поэтому геометрия обязана
+		// быть собрана вокруг него — иначе при поворотах части «орбитят» (джиттер).
+		// Тот же приём, что в LoadStepModel, но один сдвиг на всю сборку,
+		// а не по одному на часть.
+		bool CenterShipAssembly(int firstId, int count)
+		{
+			Bnd_Box box;
+			bool any = false;
+			for (int i = 0; i < count; ++i)
+			{
+				TopoDS_Shape* m = GetModel(firstId + i);
+				if (m == nullptr) continue;
+				BRepBndLib::Add(*m, box);
+				any = true;
+			}
+			if (!any) return false;
+
+			Standard_Real xmin, ymin, zmin, xmax, ymax, zmax;
+			box.Get(xmin, ymin, zmin, xmax, ymax, zmax);
+			gp_Pnt c((xmin + xmax) / 2.0, (ymin + ymax) / 2.0, (zmin + zmax) / 2.0);
+
+			gp_Trsf toOrigin;
+			toOrigin.SetTranslation(gp_Vec(c, gp_Pnt(0, 0, 0)));
+
+			for (int i = 0; i < count; ++i)
+			{
+				TopoDS_Shape* m = GetModel(firstId + i);
+				if (m == nullptr) continue;
+				*m = BRepBuilderAPI_Transform(*m, toOrigin, Standard_True).Shape();
+			}
 			return true;
 		}
 
@@ -493,6 +592,13 @@ namespace Snake3DViewer
 			ClearCrystals();
 			ClearMines();
 
+			for (NCollection_DataMap<int, Handle(AIS_Shape)>::Iterator it(*_shipParts);
+				it.More(); it.Next())
+				if (!it.Value().IsNull())
+					_aisContext()->Erase(it.Value(), Standard_False);
+			_shipParts->Clear();
+			_enginePart() = nullptr;
+
 			// Стены и сетка — часть сцены: стираем адресно и чистим векторы.
 			// EraseAll НЕ используем: он стёр бы и декорации, которые
 			// в игровом цикле никто заново не рисует.
@@ -524,6 +630,16 @@ namespace Snake3DViewer
 
 			if (index == 0)
 			{
+				if (!_shipParts->IsEmpty())
+				{
+					// Корабль заменяет голову: визуал рисует PlaceShip,
+					// здесь только заглушка для выравнивания индексов.
+					_snakeSegments->push_back(Handle(AIS_Shape)());
+					_basePositions->push_back(center);
+					_positions->push_back(center);
+					_segmentDirs->push_back(gp_Vec(0, 1, 0));
+					return;
+				}
 				if (_headModel != nullptr)
 				{
 					// Голова — загруженная .step-модель
@@ -587,6 +703,15 @@ namespace Snake3DViewer
 			_positions->push_back(center);
 			_segmentDirs->push_back(gp_Vec(0, 1, 0));
 			_aisContext()->Display(aisShape, Standard_True);
+		}
+
+		void HideSegment(int index)
+		{
+			if (index < 0 || _snakeSegments == nullptr) return;
+			if ((size_t)index >= _snakeSegments->size()) return;
+			if ((*_snakeSegments)[index].IsNull()) return;
+			if (!_aisContext().IsNull())
+				_aisContext()->Erase((*_snakeSegments)[index], Standard_False);
 		}
 
 		void MoveSegment(int index, double x, double y, double z)
@@ -1312,6 +1437,7 @@ namespace Snake3DViewer
 		{
 			for (auto& seg : *_snakeSegments)
 			{
+				if (seg.IsNull()) continue;   // заглушка корабля — стирать нечего
 				if (!_aisContext().IsNull())
 					_aisContext()->Erase(seg, Standard_False);
 			}
@@ -1367,8 +1493,8 @@ namespace Snake3DViewer
 			if ((size_t)headIndex >= _snakeSegments->size()) return;
 			if (_view().IsNull()) return;
 
-			Handle(AIS_Shape) headShape = (*_snakeSegments)[headIndex];
-			if (headShape.IsNull()) return;
+			/*Handle(AIS_Shape) headShape = (*_snakeSegments)[headIndex];
+			if (headShape.IsNull()) return;*/
 
 			double cx = (*_positions)[headIndex].X();
 			double cy = (*_positions)[headIndex].Y();
@@ -1463,6 +1589,119 @@ namespace Snake3DViewer
 			_view()->Project(x, y, z, px, py);
 			sx = (int)px;
 			sy = (int)py;   // origin — левый НИЖНИЙ угол; в WPF перевернём
+			return true;
+		}
+
+		//Методы для сборки корабля
+
+		// Разместить корабль целиком: общий кадр головы × подгоночная трансформация части.
+		// Двигатель мерцает синусоидой — как подсветка стен, но по цвету модели.
+		void PlaceShip(double x, double y, double z,
+			double fx, double fy, double fz,
+			double ux, double uy, double uz,
+			double timeSec)
+		{
+			gp_Trsf head = TrsfFromFrame(x, y, z, fx, fy, fz, ux, uy, uz);
+
+			for (NCollection_DataMap<int, Handle(AIS_Shape)>::Iterator it(*_shipParts);
+				it.More(); it.Next())
+			{
+				if (!_fitTrsf->IsBound(it.Key())) continue;
+
+				it.Value()->SetLocalTransformation(head.Multiplied((*_fitTrsf)(it.Key())));
+				_aisContext()->Redisplay(it.Value(), Standard_False);
+			}
+
+			// Корабль = голова: держим слот 0 в курсе для камеры (FollowHead)
+			// и для ориентации хвоста (MoveSegment читает positions[0])
+			if (!_snakeSegments->empty() && (*_snakeSegments)[0].IsNull())
+			{
+				(*_positions)[0] = gp_Pnt(x, y, z);
+				(*_segmentDirs)[0] = gp_Vec(fx, fy, fz);
+			}
+
+			if (!_enginePart().IsNull())
+			{
+				const double freq = 2.0;                       // Гц мерцания
+				double k = 0.5 + 0.5 * sin(timeSec * 2.0 * M_PI * freq);
+				_enginePart()->SetColor(Quantity_Color(
+					_engineGlowR * (0.55 + 0.45 * k),
+					_engineGlowG * (0.65 + 0.35 * k),
+					_engineGlowB,
+					Quantity_TOC_RGB));
+				_enginePart()->SetTransparency(0.2 + 0.3 * k);
+			}
+
+			_aisContext()->UpdateCurrentViewer();
+		}
+
+		// Создать часть корабля из уже загруженной модели и поставить на сцену.
+		// Трансформацию применит PlaceShip (общий кадр × _fitTrsf) в первом же кадре.
+		bool AddShipPart(int id)
+		{
+			TopoDS_Shape* m = GetModel(id);
+			if (m == nullptr) return false;
+
+			Handle(AIS_Shape) ais = new AIS_Shape(*m);
+			ais->SetDisplayMode(1);
+			_shipParts->Bind(id, ais);
+			if (id == 7) _enginePart() = ais;
+
+			_aisContext()->Display(ais, Standard_False);
+			return true;
+		}
+
+		// 1. Подгонка. Локальная трансформация части
+		bool SetPartPlacement(int id, double dx, double dy, double dz,
+			double yawDeg, double pitchDeg, double rollDeg)
+		{
+			//if (!_shipParts -> IsBound(id)) return false;
+			const double d2r = M_PI / 180.0;
+			
+			gp_Trsf t;
+			if (rollDeg != 0.0)	t.SetRotation(gp_Ax1(gp_Pnt(0, 0, 0), gp_Dir(0, 0, 1)), rollDeg * d2r);
+			if (pitchDeg != 0.0){ gp_Trsf r; r.SetRotation(gp_Ax1(gp_Pnt(0, 0, 0), gp_Dir(1, 0, 0)), pitchDeg * d2r); t.PreMultiply(r); }
+			if (yawDeg != 0.0)	{ gp_Trsf r; r.SetRotation(gp_Ax1(gp_Pnt(0, 0, 0), gp_Dir(0, 1, 0)), yawDeg * d2r); t.PreMultiply(r); }
+
+			t.SetTranslationPart(gp_XYZ(dx, dy, dz));
+
+			// NCollection_DataMap НЕ создаёт запись через operator() — только Bind().
+			// Конфиг сохраняем всегда (части могут появиться позже), применяем
+			// к объекту только если он уже на сцене.
+			if (_fitTrsf->IsBound(id)) (*_fitTrsf)(id) = t;
+			else _fitTrsf->Bind(id, t);
+			
+			if (_shipParts->IsBound(id))
+				_shipParts->Find(id)->SetLocalTransformation(t);
+			return true;
+		}
+
+		// 2. Покраска и материал. Цвет - оттенок, материал - блики.
+		int MaterialFromName(const char* name)
+		{
+			// Регистронезависимое сравнение с Graphic3d_NOM_*
+			if (_stricmp(name, "STEEL") == 0)          return Graphic3d_NOM_STEEL;
+			if (_stricmp(name, "CHROME") == 0)         return Graphic3d_NOM_CHROME;
+			if (_stricmp(name, "SHINY_PLASTIC") == 0)  return Graphic3d_NOM_SHINY_PLASTIC;
+			return Graphic3d_NOM_PLASTIC;
+		}
+
+		bool SetPartColor(int id, double r, double g, double b, System::String^ material)
+		{
+			if (!_shipParts->IsBound(id)) return false;
+
+			// managed String^ → нативная строка: тот же паттерн, что в LoadStepModel
+			msclr::interop::marshal_context ctx;
+			std::string mat = ctx.marshal_as<std::string>(material);
+
+			if (id == 7)
+			{
+				_engineGlowR = r; _engineGlowG = g; _engineGlowB = b;
+				_enginePart() = (*_shipParts)(id);
+			}
+
+			(*_shipParts)(id)->SetColor(Quantity_Color(r, g, b, Quantity_TOC_RGB));
+			(*_shipParts)(id)->SetMaterial((Graphic3d_NameOfMaterial)MaterialFromName(mat.c_str()));
 			return true;
 		}
 	};

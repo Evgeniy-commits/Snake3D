@@ -74,7 +74,10 @@ namespace Snake3D
     public class SnakeGame
     {
         private readonly SnakeSceneProxy _proxy;
-        private List<Point3D> _segments;        
+        private List<Point3D> _segments;
+
+        private readonly bool _shipLoaded;
+        private double _elapsed;            //Время пульса двигателя
        
         //кристаллы
         private readonly List<Point3D> _crystals = new();
@@ -167,7 +170,7 @@ namespace Snake3D
             _segmentRadius = segmentRadius;
             _foodRadius = foodRadius;
             _segments = new List<Point3D>();
-            
+
             // Загрузка модели головы — один раз, до первого Reset()
             bool ok = _proxy.LoadHeadModel(@"C:\Users\Admin\source\repos\Shake3D\models\Shatl.stp", 0.75 * segmentRadius);
             if (!ok)
@@ -185,6 +188,35 @@ namespace Snake3D
             bool mineOk = _proxy.LoadStepModel(System.IO.Path.Combine(modelsDir, "Mine.stp"), 4, foodRadius * 1.5);
 
             System.Diagnostics.Debug.WriteLine($"Модели: tail={tailOk} crystal={crystalOk} mine={mineOk}");
+
+            // Корабль: корпус, кабина, двигатель — id 5, 6, 7.
+            // Габариты: корпус ≈ длина старой головы (3 × радиус сегмента),
+            // кабина и двигатель — доли от неё, коэффициенты в GameConfig.Ship.Scales.
+            bool shipOk = true;
+
+            if (shipOk)
+                _proxy.CenterShipAssembly(GameConfig.Ship.HullId, GameConfig.Ship.Paths.Length);
+
+            for (int i = 0; i < GameConfig.Ship.Paths.Length; i++)
+            {
+                int id = GameConfig.Ship.HullId + i;
+                shipOk &= _proxy.LoadShipPart(GameConfig.Ship.Paths[i], id, GameConfig.Ship.Scale);
+                System.Diagnostics.Debug.WriteLine($"Часть {id}: {shipOk}");
+            }
+            _shipLoaded = shipOk;
+
+            // Подгонка и покраска — один раз: _fitTrsf переживает ClearScene.
+            if (_shipLoaded)
+            {
+                for (int i = 0; i < GameConfig.Ship.Paths.Length; i++)
+                {
+                    int id = GameConfig.Ship.HullId + i;
+                    var f = GameConfig.Ship.Fit[i];
+                    _proxy.SetPartPlacement(id, f[0], f[1], f[2], f[3], f[4], f[5]);
+                    var c = GameConfig.Ship.Color[i];
+                    _proxy.SetPartColor(id, c[0], c[1], c[2], GameConfig.Ship.Material[i]);
+                }
+            }
         }
 
         public void Start()
@@ -260,14 +292,30 @@ namespace Snake3D
             // CreateWalls отобразил стены заново, прячем обратно
             if (WallsOff) _proxy.SetWallsVisible(false);
 
+            // Корабль: ClearScene стёр части со сцены — пересоздаём их из кэша моделей.
+            // до AddSegment(0) — заглушка головы ставится только если
+            // _shipParts непуста, иначе прокси откатится на старую голову.
+            if (_shipLoaded)
+            {
+                for (int i = 0; i < GameConfig.Ship.Paths.Length; i++)
+                {
+                    int id = GameConfig.Ship.HullId + i;
+                    _proxy.AddShipPart(id);
+                    var c = GameConfig.Ship.Color[i];
+                    _proxy.SetPartColor(id, c[0], c[1], c[2], GameConfig.Ship.Material[i]);
+                }
+            }
+
             _segments.Clear();
 
-            for (int i = 0; i < 3; i++)
+            for (int i = 0; i < 5; i++)
             {
                 Point3D p = new Point3D(0, -i * _step, 0);
                 _segments.Add(p);
                 _proxy.AddSegment(p.X, p.Y, p.Z, _segmentRadius, i);
             }
+            if (_shipLoaded)
+                _proxy.HideSegment(1);
 
             _forward = new Vector3D(0, 1, 0);   // летим вперёд по Y
             _up = new Vector3D(0, 0, 1);   // Z — верх
@@ -287,6 +335,7 @@ namespace Snake3D
             _prevForward = _forward; _nextForward = _forward;
             _prevUp = _up; _nextUp = _up;
             _lastLogicTick = DateTime.UtcNow;
+            _elapsed = 0;
 
             // Кристаллы и мины: раскладка по счётчикам из меню.
             // Списки чистим и заполняем заново — рестарт с нулём старых объектов.
@@ -491,7 +540,7 @@ namespace Snake3D
             _prevForward = _forward;
             _prevUp = _up;
 
-            double dt = LogicInterval;
+            //double dt = LogicInterval;
 
             UpdateSmoothTurn();
 
@@ -705,6 +754,8 @@ namespace Snake3D
 
             _pulsePhase += dt * (2.0 * Math.PI / 0.4);
 
+            _elapsed += dt;
+
             _proxy.UpdateSpin(dt); //копим угол только пока игра идёт
 
             Render();
@@ -758,8 +809,25 @@ namespace Snake3D
                 double y = prev.Y + (next.Y - prev.Y) * alpha;
                 double z = prev.Z + (next.Z - prev.Z) * alpha;
 
-                if (i == 0) _proxy.MoveHead(0, x, y, z);
-                else _proxy.MoveSegment(i, x, y, z);
+                //if (i == 0) _proxy.MoveHead(0, x, y, z);
+                //else _proxy.MoveSegment(i, x, y, z);
+                if (i == 0)
+                {
+                    if (_shipLoaded)
+                    {
+                        // Корабль: позиция + интерполированный кадр + время для пульса
+                        _proxy.PlaceShip(x, y, z, fx, fy, fz, ux, uy, uz, _elapsed);
+                    }
+                    else
+                    {
+                        _proxy.MoveHead(0, x, y, z);
+                    }
+                }
+                else
+                {
+                    if (_shipLoaded && i == 1) continue;
+                    _proxy.MoveSegment(i, x, y, z);                    
+                }
             }
 
 
