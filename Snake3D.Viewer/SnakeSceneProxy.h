@@ -770,7 +770,7 @@ namespace Snake3DViewer
 			}
 
 			(*_snakeSegments)[index]->SetLocalTransformation(trsf);
-			_aisContext()->Redisplay((*_snakeSegments)[index], Standard_False);
+			//_aisContext()->Redisplay((*_snakeSegments)[index], Standard_False);
 		}
 
 		void MoveHead(int headIndex, double x, double y, double z)
@@ -795,17 +795,8 @@ namespace Snake3DViewer
 				right.Z(), fwd.Z(), up.Z(), newPos.Z() - (*_basePositions)[headIndex].Z());
 
 			(*_snakeSegments)[headIndex]->SetLocalTransformation(trsf);
-			_aisContext()->Redisplay((*_snakeSegments)[headIndex], Standard_False);
-		}
-
-		/*void AddWall(TopoDS_Shape shape)
-		{
-			Handle(AIS_Shape) aisShape = new AIS_Shape(shape);
-			aisShape->SetDisplayMode(1);
-			aisShape->SetColor(Quantity_Color(Quantity_NOC_GREEN));
-			_walls->push_back(aisShape);
-			_aisContext()->Display(aisShape, Standard_True);
-		}*/
+			//_aisContext()->Redisplay((*_snakeSegments)[headIndex], Standard_False);
+		}		
 
 		void CreateWalls(double arenaSize)
 		{
@@ -1620,7 +1611,7 @@ namespace Snake3DViewer
 				if (!_fitTrsf->IsBound(it.Key())) continue;
 
 				it.Value()->SetLocalTransformation(head.Multiplied((*_fitTrsf)(it.Key())));
-				_aisContext()->Redisplay(it.Value(), Standard_False);
+				//_aisContext()->Redisplay(it.Value(), Standard_False);
 			}
 
 			// Корабль = голова: держим слот 0 в курсе для камеры (FollowHead)

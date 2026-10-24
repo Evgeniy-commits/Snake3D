@@ -32,9 +32,8 @@ namespace Snake3D
 
         private SnakeViewport? _viewport;
         private SnakeGame? _game;
-        //private DispatcherTimer? _timer;
-        //private DispatcherTimer? _renderTimer;
-        //private DateTime _lastRender = DateTime.MinValue;
+        private readonly System.Diagnostics.Stopwatch _frameClock = System.Diagnostics.Stopwatch.StartNew();
+        private System.TimeSpan _lastElapsed;
         private DateTime _lastFrameTime;
         private readonly System.Diagnostics.Stopwatch _uptime = System.Diagnostics.Stopwatch.StartNew();
         private HudOverlay? _hud;
@@ -44,6 +43,11 @@ namespace Snake3D
         //Мышь
         private bool _rotating;
         private Point _winLastPos;
+
+        //Замеры производительности
+        private readonly System.Diagnostics.Stopwatch _onFrameWatch = new();
+        private double _onFrameSum;
+        private int _onFrameCount;
 
         public SnakeView()
         {
@@ -248,11 +252,13 @@ namespace Snake3D
 
         private void OnFrame(object? sender, EventArgs e)
         {
+            _onFrameWatch.Restart();
+
             if (_game == null) return;
 
-            var now = DateTime.UtcNow;
-            double dt = (now - _lastFrameTime).TotalSeconds;
-            _lastFrameTime = now;
+            var now = _frameClock.Elapsed;
+            double dt = (now - _lastElapsed).TotalSeconds;
+            _lastElapsed = now;
 
             // ограничитель: после сна системы не даём гигантский скачок
             if (dt > 0.5) dt = 0.5;
@@ -264,6 +270,15 @@ namespace Snake3D
             {
                 _lastHudUpdate = DateTime.UtcNow;
                 UpdateHudVisuals(); // содержимое бывшего OnRenderFrame после _game.Render()
+            }
+
+            _onFrameWatch.Stop();
+            _onFrameSum += _onFrameWatch.Elapsed.TotalMilliseconds;
+            if (++_onFrameCount >= 60)
+            {
+                System.Diagnostics.Trace.WriteLine($"OnFrame всего: {_onFrameSum / _onFrameCount:F2} мс");
+                _onFrameSum = 0;
+                _onFrameCount = 0;
             }
         }
 

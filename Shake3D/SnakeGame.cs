@@ -23,6 +23,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Media.Media3D;
@@ -161,11 +162,19 @@ namespace Snake3D
         private int _crystalCount = GameConfig.DefaultCrystalCount;
 
         //Для замера производительности
+
+        private readonly System.Diagnostics.Stopwatch _renderWatch = new();
         private readonly System.Diagnostics.Stopwatch _frameWatch = new();
         private double _frameMsSum;
         private int _frameCount;
         private readonly System.Diagnostics.Stopwatch _watch = new();
         private double _logicMsSum;
+        private double _tCrystals;
+        private double _tSegments;
+        private double _tCamera;
+        private double _tRedraw;
+        private double _dtSum;
+        private double _tHead;
 
         public SnakeGame(SnakeSceneProxy proxy, double arenaSize, double gridStep,
                                             double segmentRadius, double foodRadius)
@@ -184,7 +193,7 @@ namespace Snake3D
             {
                 // Файл не прочитался — AddSegment сам откатится на fallback-капсулу,
                 // но полезно знать об этом сразу
-                System.Diagnostics.Debug.WriteLine("Не удалось загрузить модель головы, будет fallback-капсула");
+                System.Diagnostics.Trace.WriteLine("Не удалось загрузить модель головы, будет fallback-капсула");
             }
 
             string modelsDir = @"C:\Users\Admin\source\repos\Shake3D\models\";
@@ -194,7 +203,7 @@ namespace Snake3D
             bool crystalOk = _proxy.LoadStepModel(System.IO.Path.Combine(modelsDir, "Crystall.stp"), 2, foodRadius * 2.0);
             bool mineOk = _proxy.LoadStepModel(System.IO.Path.Combine(modelsDir, "Mine.stp"), 4, foodRadius * 1.5);
 
-            System.Diagnostics.Debug.WriteLine($"Модели: tail={tailOk} crystal={crystalOk} mine={mineOk}");
+            System.Diagnostics.Trace.WriteLine($"Модели: tail={tailOk} crystal={crystalOk} mine={mineOk}");
 
             // Корабль: корпус, кабина, двигатель — id 5, 6, 7.
             // Габариты: корпус ≈ длина старой головы (3 × радиус сегмента),
@@ -208,7 +217,7 @@ namespace Snake3D
             {
                 int id = GameConfig.Ship.HullId + i;
                 shipOk &= _proxy.LoadShipPart(GameConfig.Ship.Paths[i], id, GameConfig.Ship.Scale);
-                System.Diagnostics.Debug.WriteLine($"Часть {id}: {shipOk}");
+                System.Diagnostics.Trace.WriteLine($"Часть {id}: {shipOk}");
             }
             _shipLoaded = shipOk;
 
@@ -582,147 +591,6 @@ namespace Snake3D
             _lastLogicTick = DateTime.UtcNow;
         }
 
-        //public void Update()
-        //{
-        //    if (!IsRunning || IsGameOver || IsPaused) return;
-        //    if (_segments.Count == 0) { TriggerGameOver(); return; }
-
-        //    // состояние ДО тика — для интерполяции
-        //    _prevPositions.Clear();
-        //    foreach (var s in _segments) _prevPositions.Add(s);
-        //    _prevForward = _forward;
-        //    _prevUp = _up;
-
-        //    //double dt = LogicInterval;
-
-        //    UpdateSmoothTurn();
-
-        //    //палавный поворот(если есть скорость)
-        //    //if (_yawRate != 0) RotateYawContinuos(_yawRate * dt);
-        //    //if (_pitchRate != 0) RotatePitchContinuos(_pitchRate * dt);
-
-        //    // применяем один поворот на 90°, если был запрос
-        //    switch (_pendingTurn)
-        //    {
-        //        case 1: RotateYaw(1); break;  // лево
-        //        case 2: RotateYaw(-1); break;  // право
-        //        case 3: RotatePitch(1); break;  // вверх
-        //        case 4: RotatePitch(-1); break;  // вниз
-        //    }
-        //    _pendingTurn = 0;
-
-        //    //было _direction, теперь _forward
-        //    Point3D newHead = _segments[0] + _forward * _step;
-
-        //    //границы куба по всем осям
-        //    if (Math.Abs(newHead.X) > _arenaSize ||
-        //        Math.Abs(newHead.Y) > _arenaSize ||
-        //        Math.Abs(newHead.Z) > _arenaSize)
-        //    {
-        //        TriggerGameOver();
-        //        return;
-        //    }
-
-        //    // Сумма радиусов: голова космолета + кристалл
-        //    double combinedRadius = _segmentRadius + _foodRadius;
-
-        //    // Допуск «почти коснулся»: если расстояние меньше суммы радиусов + небольшой запас
-        //    // Запас нужен, чтобы компенсировать «пропуск» кадра (космолет пролетел между кадрами)
-        //    double tolerance = 0.8;
-
-        //    bool ateFood = false;
-
-        //    for (int i = 0; i < _crystals.Count; i++)
-        //    {
-        //        if (Distance(newHead, _crystals[i]) <= _segmentRadius + _foodRadius + tolerance)
-        //        {
-        //            Score += 10;
-        //            ScoreChanged?.Invoke(this, Score);
-        //            ateFood = true;
-
-        //            _proxy.RemoveCrystalAt(i);
-        //            _crystals.RemoveAt(i);
-        //            EnsureCrystals();   // сразу достраиваем до пяти
-        //            break;
-        //        }
-        //    }
-
-        //    for (int i = 0; i < _mines.Count; i++)
-        //    {
-        //        if (Distance(newHead, _mines[i]) <= _segmentRadius + _foodRadius + tolerance)
-        //        {
-        //            Score -= MineScore;
-        //            ScoreChanged?.Invoke(this, Score);
-
-        //            _proxy.RemoveMineAt(i);
-        //            _mines.RemoveAt(i);
-
-        //            if (Score < 0)
-        //            {
-        //                TriggerGameOver();
-        //                return;
-        //            }
-
-        //            EnsureMines(); //восстанавливаем мины
-        //            break;
-        //        }
-        //    }
-
-        //    // запоминаем хвост до сдвига
-        //    Point3D oldTail = _segments[_segments.Count - 1];
-
-        //    //сдвиг тела
-        //    for (int i = _segments.Count - 1; i > 0; i--)
-        //    {
-        //        _segments[i] = _segments[i - 1];                
-        //    }
-        //    _segments[0] = newHead;
-
-        //    //рост
-        //    if (ateFood)
-        //    {
-        //        _segments.Add(oldTail);
-        //        _proxy.AddSegment(oldTail.X, oldTail.Y, oldTail.Z, _segmentRadius, _segments.Count - 1);
-        //    }
-
-        //    //пропуск первых 4 сегментов (было 2)
-        //    if (_segments.Count > 5)
-        //    {
-        //        var head = _segments[0];
-        //        double crashRadius = _step * 0.6;
-        //        for (int i = 4; i < _segments.Count; i++)
-        //        {
-        //            if (Distance(head, _segments[i]) < crashRadius)
-        //            {
-        //                TriggerGameOver();
-        //                return;
-        //            }
-        //        }
-        //    }
-
-        //    //камера
-        //    //_proxy.FollowHead(0);
-        //    //_proxy.Redraw();
-
-        //    // состояние ПОСЛЕ тика
-        //    _nextPositions.Clear();
-        //    foreach (var s in _segments) _nextPositions.Add(s);
-
-        //    //нормализация, чтобы модель не дергалась
-        //    double fl = Math.Sqrt(_forward.X * _forward.X + _forward.Y * _forward.Y + _forward.Z * _forward.Z);
-        //    if (fl > 1e-9) _forward = new Vector3D(_forward.X / fl, _forward.Y / fl, _forward.Z / fl);
-
-        //    double ud = _up.X * _forward.X + _up.Y * _forward.Y + _up.Z * _forward.Z;
-        //    _up = new Vector3D(_up.X - ud * _forward.X, _up.Y - ud * _forward.Y, _up.Z - ud * _forward.Z);
-        //    double ul = Math.Sqrt(_up.X * _up.X + _up.Y * _up.Y + _up.Z * _up.Z);
-        //    if (ul > 1e-9) _up = new Vector3D(_up.X / ul, _up.Y / ul, _up.Z / ul);
-
-        //    _nextForward = _forward;
-        //    _nextUp = _up;
-        //    _lastLogicTick = DateTime.UtcNow;
-
-        //}
-
         //Это классический паттерн game loop с fixed timestep:
 
         //Логика шагает дискретно(ровно 20 раз в секунду независимо от FPS).
@@ -735,6 +603,7 @@ namespace Snake3D
         //интерполяция.
         public void Frame(double dt)
         {
+            _dtSum += dt;
             _frameWatch.Restart();
             _watch.Restart();
 
@@ -772,20 +641,36 @@ namespace Snake3D
             _logicMsSum += _watch.Elapsed.TotalMilliseconds;
             // --- конец замера логики ---
 
-            _watch.Restart();
+            _renderWatch.Restart();
             Render();
-            _watch.Stop();
-            double tRender = _watch.Elapsed.TotalMilliseconds;
+            _renderWatch.Stop();
+            double tRender = _renderWatch.Elapsed.TotalMilliseconds;
 
             _frameWatch.Stop();
             _frameMsSum += _frameWatch.Elapsed.TotalMilliseconds;
             if (++_frameCount >= 60)   // раз в секунду при 60 FPS
             {
-                System.Diagnostics.Debug.WriteLine(
-                $"Кадр: {_frameMsSum / _frameCount:F2} мс | логика: {_logicMsSum / _frameCount:F2} | рендер: {tRender:F2} | объекты: {_segments.Count}+{_crystals.Count}+{_mines.Count}");
+                double dtAvg = _dtSum / _frameCount;
+                double frameAvg = _frameMsSum / _frameCount;
+                double logicAvg = _logicMsSum / _frameCount;
+                double crystalsAvg = _tCrystals / _frameCount;
+                double segmentsAvg = _tSegments / _frameCount;
+                double headAvg = _tHead / _frameCount;        // ← добавить сюда
+                double cameraAvg = _tCamera / _frameCount;
+                double redrawAvg = _tRedraw / _frameCount;
+                int segments = _segments.Count, crystals = _crystals.Count, mines = _mines.Count;
+
                 _frameMsSum = 0;
                 _logicMsSum = 0;
+                _tCrystals = _tSegments = _tCamera = _tRedraw = _tHead = 0;   // ← и _tHead в обнуление
+                _dtSum = 0;
                 _frameCount = 0;
+
+                System.Diagnostics.Trace.WriteLine(
+                    $"Кадр: {frameAvg:F2} | логика: {logicAvg:F2} | рендер: {tRender:F2} | кристаллы: {crystalsAvg:F2} " +
+                    $"| сегменты: {segmentsAvg:F2} | камера: {cameraAvg:F2} | Redraw: {redrawAvg:F2} " +
+                    $"| FPS: {1.0 / dtAvg:F1} | объекты: {segments}+{crystals}+{mines}" +
+                    $"| голова: {headAvg:F2}");
             }
         }
 
@@ -825,9 +710,13 @@ namespace Snake3D
             double ulen = Math.Sqrt(ux * ux + uy * uy + uz * uz);
             if (ulen > 1e-9) { ux /= ulen; uy /= ulen; uz /= ulen; }
 
+            _watch.Restart();
             _proxy.SetOrientation(fx, fy, fz, ux, uy, uz);
             _proxy.UpdateCrystalOrientations();
-
+            _watch.Stop();
+            _tCrystals += _watch.Elapsed.TotalMilliseconds;
+                
+            _watch.Restart();
             for (int i = 0; i < _nextPositions.Count; i++)
             {
                 Point3D prev = i < _prevPositions.Count ? _prevPositions[i] : _nextPositions[i];
@@ -837,29 +726,34 @@ namespace Snake3D
                 double y = prev.Y + (next.Y - prev.Y) * alpha;
                 double z = prev.Z + (next.Z - prev.Z) * alpha;
 
-                //if (i == 0) _proxy.MoveHead(0, x, y, z);
-                //else _proxy.MoveSegment(i, x, y, z);
                 if (i == 0)
                 {
+                    _watch.Restart();
                     if (_shipLoaded)
-                    {
-                        // Корабль: позиция + интерполированный кадр + время для пульса
                         _proxy.PlaceShip(x, y, z, fx, fy, fz, ux, uy, uz, _elapsed);
-                    }
                     else
-                    {
                         _proxy.MoveHead(0, x, y, z);
-                    }
+                    _watch.Stop();
+                    _tHead += _watch.Elapsed.TotalMilliseconds;
                 }
                 else
                 {
                     if (_shipLoaded && i == 1) continue;
-                    _proxy.MoveSegment(i, x, y, z);                    
+                    _proxy.MoveSegment(i, x, y, z);
                 }
             }
+            _watch.Stop();
+            _tSegments += _watch.Elapsed.TotalMilliseconds;
 
-            _proxy.FollowHead(0);
+            _watch.Restart();
+            _proxy.FollowHead(0);   // камера — ПОСЛЕ перемещения всех объектов
+            _watch.Stop();
+            _tCamera += _watch.Elapsed.TotalMilliseconds;
+
+            _watch.Restart();
             _proxy.Redraw();
+            _watch.Stop();
+            _tRedraw += _watch.Elapsed.TotalMilliseconds;
         }
 
         private void UpdateSmoothTurn()
