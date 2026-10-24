@@ -77,15 +77,13 @@ namespace Snake3D
         //до старта игры.
 
         //Инициализация самой игры (сцена, объекты)
-        public void InitializeGameScene(double arenaSize, double segmentRadius, double foodRadius)
+        public void InitializeGameScene(double arenaSize, double gridStep)
         {
             if (Proxy == null || !_isInitialized) return;
 
-            // 1. Сетка (шаг 1.0)
-            Proxy.CreateGrid(arenaSize, 5.0);
-
-            // 5. Финальная подгонка камеры
-            Proxy.Redraw();
+            // Сетка/стены/подсветка строятся в SnakeGame.Reset —
+            // здесь только небо: оно не зависит от опций и не стирается рестартом.
+            Proxy.CreateStarSky(800, 240.0);
         }
 
         //Dispose(bool) — при разрушении контрола вызывает Proxy?.ClearScene().

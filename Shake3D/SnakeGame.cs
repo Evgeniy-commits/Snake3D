@@ -78,24 +78,38 @@ namespace Snake3D
        
         //кристаллы
         private readonly List<Point3D> _crystals = new();
-        public const int CrystalCount = 50;
         public IReadOnlyList<Point3D> Crystals => _crystals;
 
         //мины
         private readonly List<Point3D> _mines = new();
-        public const int MineCount = 25;
         public const int MineScore = 50;
-        public IReadOnlyList<Point3D> Mines => _mines;  
+        public IReadOnlyList<Point3D> Mines => _mines;
+
+        //Режим «без стен» (клавиша T)
+        public bool WallsOff { get; private set; }
+        // Радиус зоны предупреждения: 15 единиц = 4 
+        private double WarnRadius => 5.0 * _cellSize;
+        private double _cellSize;   // ДОЛЖЕН совпадать с шагом CreateGrid
+
+        // Активные подсветки: (ось, сторона, i, j).
+        // Diff-множество: прокси вызываем только для различий.
+        //private readonly HashSet<(int axis, int side, int i, int j)> _highlightCells = new();
+        // Активные подсветки: ключ → текущий уровень яркости 0..1
+        private readonly Dictionary<(int axis, int side, int i, int j), double> _highlightCells = new();
+
+        // Фаза «дыхания»: полная синусоида за 0,4 секунды
+        private double _pulsePhase;
+
 
         private Vector3D _forward;   // куда летим
         private Vector3D _up;        // где верх
 
         private int _pendingTurn = 0;  // 0=нет, 1=лево, 2=право, 3=вверх, 4=вниз
 
-        private double _segmentRadius = 0.5;
-        private double _step = 1.0;
-        private double _foodRadius = 0.5;
-        private double _arenaSize = 100.0;
+        private readonly double  _segmentRadius;
+        private readonly double  _step = GameConfig.StepLength;
+        private readonly double  _foodRadius;
+        private readonly double _arenaSize;
         private Random _rand = new Random();
 
         public int Score { get; private set; }
@@ -128,7 +142,10 @@ namespace Snake3D
         private DateTime? _downPressTime;
         private bool _smoothActive;
 
-        public const double LogicInterval = 0.05; //20 Гц
+        //private const double BaseLogicInterval = 0.05;
+        public double SpeedMultiplier { get; set; } = 1.0;
+        public double LogicInterval =>
+            _step / (GameConfig.BaseStepsPerSecond * Math.Max(0.25, SpeedMultiplier));
 
         private readonly List<Point3D> _prevPositions = new();
         private readonly List<Point3D> _nextPositions = new();
@@ -137,18 +154,22 @@ namespace Snake3D
         private DateTime _lastLogicTick = DateTime.UtcNow;
         private double _logicAccumulator = 0;
 
-        //public Point3D CrystalPos => _crystalPos;
+        private int _mineCount = GameConfig.DefaultMineCount;
+        private int _crystalCount = GameConfig.DefaultCrystalCount;
 
-        public SnakeGame(SnakeSceneProxy proxy, double arenaSize, double segmentRadius, double foodRadius)
+        public SnakeGame(SnakeSceneProxy proxy, double arenaSize, double gridStep,
+                                            double segmentRadius, double foodRadius)
         {
             _proxy = proxy;
             _arenaSize = arenaSize;
+            _cellSize = gridStep;
+            //_step = gridStep;
             _segmentRadius = segmentRadius;
             _foodRadius = foodRadius;
             _segments = new List<Point3D>();
 
             // Загрузка модели головы — один раз, до первого Reset()
-            bool ok = _proxy.LoadHeadModel(@"C:\Users\Admin\source\repos\Shake3D\models\Shatl.stp", segmentRadius);
+            bool ok = _proxy.LoadHeadModel(@"C:\Users\Admin\source\repos\Shake3D\models\Shatl.stp", 0.75 * segmentRadius);
             if (!ok)
             {
                 // Файл не прочитался — AddSegment сам откатится на fallback-капсулу,
@@ -159,16 +180,15 @@ namespace Snake3D
             string modelsDir = @"C:\Users\Admin\source\repos\Shake3D\models\";
             // Загрузка моделей хвоста, кристалла и мины — один раз, до первого Reset()
 
-            bool tailOk = _proxy.LoadStepModel(System.IO.Path.Combine(modelsDir, "Tail.stp"), 1, 1.0);
-            bool crystalOk = _proxy.LoadStepModel(System.IO.Path.Combine(modelsDir, "Crystall.stp"), 2, 3.0);
-            bool mineOk = _proxy.LoadStepModel(System.IO.Path.Combine(modelsDir, "Mine.stp"), 4, 1.5);
+            bool tailOk = _proxy.LoadStepModel(System.IO.Path.Combine(modelsDir, "Tail.stp"), 1, segmentRadius * 1.5);
+            bool crystalOk = _proxy.LoadStepModel(System.IO.Path.Combine(modelsDir, "Crystall.stp"), 2, foodRadius * 2.0);
+            bool mineOk = _proxy.LoadStepModel(System.IO.Path.Combine(modelsDir, "Mine.stp"), 4, foodRadius * 1.5);
 
             System.Diagnostics.Debug.WriteLine($"Модели: tail={tailOk} crystal={crystalOk} mine={mineOk}");
         }
 
         public void Start()
         {
-            Reset();
             IsRunning = true;
             IsGameOver = false;
         }
@@ -195,14 +215,50 @@ namespace Snake3D
             }
         }
 
+        public void ToggleWalls()
+        {
+            SetWalls(WallsOff);
+            if (!WallsOff)
+                foreach (var c in _highlightCells.Keys)
+                    _proxy.SetHighlightLevel(c.axis, c.side, c.i, c.j, 0.0);
+            _highlightCells.Clear();
+        }
+
+        // Единственная точка применения опций меню
+        // Вызывается ДО Reset: Reset спавнит объекты уже с учётом значений —
+        // «спавнить, а потом прятать» не нужно нигде.
+        public void ApplyOptions(GameOptions o)
+        {
+            TapTurnEnabled = o.TapControl;
+            SpeedMultiplier = o.Speed;
+            SetWalls(o.WallsOn);
+
+            _crystalCount = Math.Clamp(o.CrystalCount, 1, GameConfig.MaxCrystalCount);
+            _mineCount = Math.Clamp(o.MinesCount, 0, GameConfig.MaxMineCount);
+        }
+
+        public void SetWalls(bool on)
+        {
+            bool newOff = !on;
+            if (WallsOff == newOff) return;   //повторный вызов — пустой
+            WallsOff = newOff;
+            _proxy.SetWallsVisible(on);
+        }
+
         public void Reset()
         {
             _proxy.ClearScene();
 
             // Арена: стены + сетка пересоздаются после каждой чистки.
-            // Без этого после первого рестарта арена пустая.
+            // Шаг сетки = _cellSize (задан конструктором из опций меню),
+            // никаких локальных «5.0» — единый источник истины.
             _proxy.CreateWalls(_arenaSize);
-            _proxy.CreateGrid(_arenaSize, 5.0);   // шаг сетки — подставьте свой
+            _proxy.CreateGrid(_arenaSize, _cellSize);
+            _proxy.SetHighlightGrid(_arenaSize, _cellSize);
+
+            // Если режим «без стен» был включён до рестарта —
+            // CreateWalls отобразил стены заново, прячем обратно
+            if (WallsOff) _proxy.SetWallsVisible(false);
 
             _segments.Clear();
 
@@ -213,7 +269,6 @@ namespace Snake3D
                 _proxy.AddSegment(p.X, p.Y, p.Z, _segmentRadius, i);
             }
 
-            // было _direction = new Vector3D(0,0,1)
             _forward = new Vector3D(0, 1, 0);   // летим вперёд по Y
             _up = new Vector3D(0, 0, 1);   // Z — верх
             _pendingTurn = 0;
@@ -232,7 +287,9 @@ namespace Snake3D
             _prevForward = _forward; _nextForward = _forward;
             _prevUp = _up; _nextUp = _up;
             _lastLogicTick = DateTime.UtcNow;
-           
+
+            // Кристаллы и мины: раскладка по счётчикам из меню.
+            // Списки чистим и заполняем заново — рестарт с нулём старых объектов.
             _crystals.Clear();
             EnsureCrystals();
 
@@ -241,7 +298,6 @@ namespace Snake3D
 
             Score = 0;
             ScoreChanged?.Invoke(this, Score);
-            _proxy.SetViewMode(0);
             _proxy.Redraw();
         }
 
@@ -327,10 +383,12 @@ namespace Snake3D
             // было _direction, теперь _forward
             newHead = _segments[0] + _forward * _step;
 
+            double half = _arenaSize / 1.7;
+
             //границы куба по всем осям
-            if (Math.Abs(newHead.X) > _arenaSize ||
-                Math.Abs(newHead.Y) > _arenaSize ||
-                Math.Abs(newHead.Z) > _arenaSize)
+            if (Math.Abs(newHead.X) > half ||
+                Math.Abs(newHead.Y) > half ||
+                Math.Abs(newHead.Z) > half)
             {
                 TriggerGameOver();
                 return false;
@@ -442,6 +500,9 @@ namespace Snake3D
             if (!Advance(out Point3D newHead, out Point3D oldTail))
                 return;                                            // проигрыш уже оформлен в Advance
             if (CheckCollisions(newHead, oldTail)) return;         // проигрыш уже оформлен
+
+            // Подсветка границы — раз на логический тик (20 Гц), не на кадр
+            UpdateBoundaryHighlights(newHead);
 
             //камера
             //_proxy.FollowHead(0);
@@ -642,6 +703,8 @@ namespace Snake3D
                 }
             }
 
+            _pulsePhase += dt * (2.0 * Math.PI / 0.4);
+
             _proxy.UpdateSpin(dt); //копим угол только пока игра идёт
 
             Render();
@@ -737,6 +800,87 @@ namespace Snake3D
             else _yawRate = 0;
         }
 
+        // Подсветка границы в режиме «без стен».
+        // Для каждой из 6 плоскостей: дистанция головы до плоскости,
+        // точка удара курса и пятно подсветки, растущее по мере приближения.
+        private void UpdateBoundaryHighlights(Point3D head)
+        {
+            var wanted = new Dictionary<(int axis, int side, int i, int j), double>();
+
+            if (WallsOff)
+            {
+                double half = _arenaSize / 2.0;
+                int n = (int)Math.Round(_arenaSize / _cellSize); // ячеек на сторону
+
+                for (int axis = 0; axis < 3; axis++)
+                {
+                    double coord = axis == 0 ? head.X : axis == 1 ? head.Y : head.Z;
+                    double f = axis == 0 ? _forward.X : axis == 1 ? _forward.Y : _forward.Z;
+
+                    double d = half - Math.Abs(coord);   // дистанция до плоскости
+                    if (d > WarnRadius) continue;
+
+                    int side = coord >= 0 ? 1 : -1;
+
+                    // Точка удара: продолжаем курс до пересечения с плоскостью.
+                    // t = d / |f_оси| — луч из головы вдоль forward до плоскости.
+                    // Если к плоскости не летим — берём проекцию головы на неё.
+                    bool flyingTo = f * side > 1e-6;
+                    double t = flyingTo ? d / Math.Abs(f) : 0.0;
+                    double ix = head.X + _forward.X * t;
+                    double iy = head.Y + _forward.Y * t;
+                    double iz = head.Z + _forward.Z * t;
+
+                    // Пятно: на входе в зону — 0.75 клетки (горит одна ячейка),
+                    // у самой границы — весь WarnRadius. Максимум гарантирует,
+                    // что хотя бы ближайшая ячейка загорится сразу.
+                    double r = Math.Max(_cellSize * 0.75, WarnRadius - d);
+
+                    for (int i = 0; i < n; i++)
+                    {
+                        for (int j = 0; j < n; j++)
+                        {
+                            double u = -half + (i + 0.5) * _cellSize;
+                            double v = -half + (j + 0.5) * _cellSize;
+
+                            double du, dv;
+                            if (axis == 0) { du = iy - u; dv = iz - v; }
+                            else if (axis == 1) { du = ix - u; dv = iz - v; }
+                            else { du = ix - u; dv = iy - v; }
+
+                            double dist = Math.Sqrt(du * du + dv * dv);
+                            if (dist > r) continue;
+
+                            // Пространственный градиент: 1.0 в точке удара, 0.0 на краю пятна
+                            double level = 1.0 - dist / r;
+
+                            // Временной градиент: пульс 0.78..1.0 — пятно «дышит» даже в покое
+                            double pulse = 0.6 + 0.4 * (0.5 + 0.5 * Math.Sin(_pulsePhase)); // размах 0.6..1.0
+
+                            wanted[(axis, side, i, j)] = level * pulse;
+                        }
+                    }
+                }
+            }
+
+            // Гасим пропавшие, обновляем заметно изменившиеся
+            foreach (var c in _highlightCells)
+                if (!wanted.ContainsKey(c.Key))
+                    _proxy.SetHighlightLevel(c.Key.axis, c.Key.side, c.Key.i, c.Key.j, 0.0);
+
+            foreach (var kv in wanted)
+            {
+                if (!_highlightCells.TryGetValue(kv.Key, out double prev) ||
+                    Math.Abs(prev - kv.Value) > 0.05)
+                    _proxy.SetHighlightLevel(kv.Key.axis, kv.Key.side, kv.Key.i, kv.Key.j, kv.Value);
+            }
+
+            _highlightCells.Clear();
+            foreach (var kv in wanted) _highlightCells[kv.Key] = kv.Value;
+
+            _proxy.CommitHighlights();   // одна перерисовка на весь тик
+        }
+
         //Поиск свободного места(FindFreeSpot)
         //Случайная точка с проверкой: не на змейке, не на кристалле,
         //не на мине.До 200 попыток; если не нашли — ставим куда угодно
@@ -777,7 +921,7 @@ namespace Snake3D
 
         private void EnsureCrystals()
         {
-            while (_crystals.Count < CrystalCount)
+            while (_crystals.Count < _crystalCount)
             {
                 Point3D p = FindFreeSpot();
                 _crystals.Add(p);
@@ -787,7 +931,7 @@ namespace Snake3D
 
         private void EnsureMines()
         {
-            while (_mines.Count < MineCount)
+            while (_mines.Count < _mineCount)
             {
                 Point3D p = FindFreeSpot();
                 _mines.Add(p);
@@ -867,3 +1011,29 @@ namespace Snake3D
         }
     }
 }
+
+
+//ДЛЯ ПОДСВЕТКИ
+//Диагностика коллизии. Причина запаздывания — рассинхрон двух систем координат
+//одной и той же арены: стены и сетка построены в координатах ±arenaSize/2,
+//а аналитическая проверка границы сравнивала с ±arenaSize.
+//Полупрозрачность стен (0.75) визуально маскировала пролет сквозь них,
+//поэтому баг выглядел как «задержка», а не «двойная толщина мира».
+//Урок: любая аналитическая граница должна вычисляться из того же источника,
+//что и геометрия (half = size/2 — единая формула).
+
+//Подсветка. Конвейер за один тик: голова → для каждой плоскости дистанция
+//d = half − |coord| → отсечение плоскостей дальше зоны
+//предупреждения → луч-пересечение курса с плоскостью (t = d/|f|) → круг радиуса
+//max(0.75·cell, R − d) вокруг точки удара → множество ячеек → diff
+//с прошлым тиком → точечные SetHighlightCell. Прокси создаёт грань ячейки
+//ровно один раз за всю жизнь приложения (кэш в std::map),
+//дальше — только включение/выключение видимости. Сдвиг +0.02 от
+//плоскости убирает z-fighting с линиями сетки.
+
+//Ключевой компромисс, который стоит зафиксировать: подсветка меняется на
+//логических тиках (20 Гц) — на глаз этого достаточно, а diff экономит и OCCT,
+//и мусор GC. Если захотите плавного «разгорания» ячеек — это расширение:
+//прокси должен принимать уровень (0..1) и менять прозрачность через
+//SetTransparency, а diff — включать градиент по значению. Могу расписать
+//вторым уровнем сложности, если для пособия нужен вариант «со звёздочкой».

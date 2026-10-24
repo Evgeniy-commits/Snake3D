@@ -39,6 +39,7 @@ namespace Snake3D
         private readonly System.Diagnostics.Stopwatch _uptime = System.Diagnostics.Stopwatch.StartNew();
         private HudOverlay? _hud;
         private DateTime _lastHudUpdate = DateTime.MinValue;
+        private bool _menuHandled = false;
 
         //Мышь
         private bool _rotating;
@@ -85,63 +86,91 @@ namespace Snake3D
         {
             try
             {
+                if (_menuHandled) return;      // Loaded может сработать повторно
+                _menuHandled = true;
+
                 _viewport = new SnakeViewport();
                 ViewportHost.Child = _viewport;
 
-                double arenaSize = 100.0;
+                // Меню — НЕ в Loaded: окно ещё не показано, ShowDialog падает
+                // с InvalidOperationException (EnsureHandle после закрытия окна).
+                // Откладываем до момента, когда окно реально на экране:
+                // BeginInvoke выполнит ShowMenu после завершения загрузки.
+                Dispatcher.BeginInvoke(new Action(ShowMenu),
+                                       System.Windows.Threading.DispatcherPriority.ApplicationIdle);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(ex.ToString(), "Ошибка в Loaded");
+            }
+        }
 
-                // 1. Рисуем сетку ОДИН раз (до игры)
-                // InitializeGameScene вызывает InitialFit() — камера встанет по сетке
-                _viewport.InitializeGameScene(arenaSize: arenaSize, segmentRadius: 0.45, foodRadius: 0.4);
+        // Вся инициализация, зависящая от опций меню. Вызывается через BeginInvoke:
+        // к этому моменту окно показано, ShowDialog легален.
+        private void ShowMenu()
+        {
+            try
+            {
+                if (!IsLoaded) return;   // окно закрыли раньше, чем открылось меню
 
-                // 2. Создаем логику игры
-                _game = new SnakeGame(_viewport.Proxy!, arenaSize, 0.45, 0.4);
+                var menu = new MenuWindow { Owner = this };
+                if (menu.ShowDialog() != true) { Close(); return; }   // крестик/«Выход»
+                var opt = menu.Options;
 
-                // 3. Подписываемся на события
+                // 1. Сетка + единственная подгонка камеры (небо — внутри, после FitScene)
+                _viewport!.InitializeGameScene(opt.ArenaSize, opt.GridStep);
+
+                // 2. Логика игры: модели STEP грузятся один раз в конструкторе
+                _game = new SnakeGame(_viewport.Proxy!, opt.ArenaSize, opt.GridStep,
+                                      GameConfig.SegmentRadius, GameConfig.FoodRadius);
+
+                // 3. События логики приходят из кадрового цикла — в UI-поток через Dispatcher
                 _game.ScoreChanged += (s, score) =>
                     Dispatcher.Invoke(() => ScoreText.Text = score.ToString());
                 _game.GameOver += (s, ev) =>
                     Dispatcher.Invoke(() => StatusText.Text = "Игра окончена! SPACE — рестарт");
 
-                // 4. Фон
-                //_viewport.Proxy!.SetBackgroundColor(30, 30, 46);
-                _viewport.Proxy!.SetBackgroundColor(25, 25, 112);
+                // 4. Фон почти чёрный, с холодным оттенком — звёзды проступают
+                _viewport.Proxy!.SetBackgroundColor(5, 5, 10);
 
-                // 5. Сброс игры: рисует змею+еду, затем InitialFit()
-                //    InitialFit теперь сработает по сетке+змея+еда вместе
+                // 5. Опции ДО Reset: сцена строится сразу с учётом выбора (мины, кристаллы, стены)
+                _game.ApplyOptions(opt);
                 _game.Reset();
+                _viewport.Proxy!.FitScene();
+                _viewport.Proxy!.SetViewMode(opt.CockpitView ? 1 : 0);
                 _game.Start();
 
-                // Мышь: слушаем WinForms-события контрола вьюпорта
-                // WPF PreviewMouse* над областью WindowsFormsHost не срабатывают
-                // (airspace: ввод уходит напрямую в нативный HWND OCCT).
-                _viewport!.MouseDown    += Viewport_WinMouseDown;
-                _viewport.MouseMove     += Viewport_WinMouseMove;
-                _viewport.MouseUp       += Viewport_WinMouseUp;
-                _viewport.MouseWheel    += Viewport_WinMouseWheel;
+                // 6. Мышь — на WinForms-события контрола (airspace: WPF-события
+                //    над нативным HWND не срабатывают). Клавиатура — на WPF.
+                _viewport.MouseDown += Viewport_WinMouseDown;
+                _viewport.MouseMove += Viewport_WinMouseMove;
+                _viewport.MouseUp += Viewport_WinMouseUp;
+                _viewport.MouseWheel += Viewport_WinMouseWheel;
 
-                // Единый кадровый цикл
+                PreviewKeyDown += SnakeView_PreviewKeyDown;
+                PreviewKeyUp += SnakeView_PreviewKeyUp;
+
+                // 7. Единый кадровый цикл
                 _lastFrameTime = DateTime.UtcNow;
                 CompositionTarget.Rendering += OnFrame;
 
-                // HUD-оверлей
+                // 8. HUD-оверлей
                 _hud = new HudOverlay();
                 _hud.Owner = this;
                 _hud.Show();
                 UpdateHudPlacement();
                 LocationChanged += (s, e) => UpdateHudPlacement();
                 SizeChanged += (s, e) => UpdateHudPlacement();
-
-                // 7. События мыши/клавиатуры
-                PreviewKeyDown += SnakeView_PreviewKeyDown;
-                PreviewKeyUp += SnakeView_PreviewKeyUp;
-                
                 Closed += (s, ev) => { _hud?.Close(); _hud = null; };
             }
             catch (Exception ex)
             {
-                MessageBox.Show(ex.ToString(), "Ошибка в Loaded");
+                MessageBox.Show(ex.ToString(), "Ошибка в меню");
             }
+        }
+        private void BtnExit_Click(object sender, RoutedEventArgs e)
+        {
+            DialogResult = false;   // ShowMenu увидит false и сам закроет главное окно
         }
         private void SnakeView_PreviewKeyDown(object sender, KeyEventArgs e)
         {
@@ -173,6 +202,13 @@ namespace Snake3D
                     if (e.IsRepeat) break;
                     _game.TapTurnEnabled = !_game.TapTurnEnabled;
                     StatusText.Text = _game.TapTurnEnabled ? "Тап-поворот: ВКЛ" : "Тап-поворот: ВЫКЛ";
+                    break;
+                case Key.T:
+                    if (e.IsRepeat) break;
+                    _game.ToggleWalls();
+                    StatusText.Text = _game.WallsOff
+                        ? "Режим: без стен — границу показывает подсветка"
+                        : "Стены: ВКЛ";
                     break;
             }
         }
@@ -364,3 +400,4 @@ namespace Snake3D
 //вверх — без переворота вращение и панорама поедут «вверх ногами». А старый зум
 //через Zoom(100,100,110,100) к тому же не различает направление колеса
 //(используется только длина вектора).
+
