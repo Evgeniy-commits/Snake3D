@@ -41,6 +41,9 @@ namespace Snake3D
         public double MusicVolume { get; private set; } = 0.6;
         public double SfxVolume { get; private set; } = 0.8;
 
+        private int _sfxCount;
+        private DateTime _lastSfxReport = DateTime.UtcNow;
+
         public AudioService()
         {
             _music = new MediaPlayer();
@@ -174,17 +177,35 @@ namespace Snake3D
             _flight.Volume = v01 * 0.7;
         }
 
+        private readonly HashSet<string> _warmed = new();
+
         public void PlaySfx(string name)
         {
             if (!SfxEnabled || !_sfx.TryGetValue(name, out string file)) return;
 
+            _sfxCount++;
+            if ((DateTime.UtcNow - _lastSfxReport).TotalSeconds >= 1)
+            {
+                System.Diagnostics.Trace.WriteLine($"sfx за сек: {_sfxCount}");
+                _sfxCount = 0;
+                _lastSfxReport = DateTime.UtcNow;
+            }
+
+            bool cold = _warmed.Add(name);
+
             var p = _sfxPool[_sfxNext];
             _sfxNext = (_sfxNext + 1) % _sfxPool.Count;
 
+            var w = System.Diagnostics.Stopwatch.StartNew();
             p.Open(new Uri(file));
             p.Volume = SfxVolume;
             p.Position = TimeSpan.Zero;
             p.Play();
+            w.Stop();
+
+            if (cold)
+                System.Diagnostics.Trace.WriteLine(
+                    $"sfx cold-open {name}: {w.Elapsed.TotalMilliseconds:F1} мс");
         }
 
         public void Dispose()
