@@ -32,9 +32,9 @@ namespace Snake3D
 
             public static readonly string[] Paths =
             {
-                @"C:\Users\Admin\source\repos\Shake3D\models\Shatl.stp",
-                @"C:\Users\Admin\source\repos\Shake3D\models\Cockpit.stp",
-                @"C:\Users\Admin\source\repos\Shake3D\models\Engine.stp"
+                @"models\Shatl.stp",
+                @"models\Cockpit.stp",
+                @"models\Engine.stp"
             };
 
             public static readonly double Scale = 0.65;
@@ -43,9 +43,9 @@ namespace Snake3D
             // Подбирается визуально в режиме обзора — крутите числа, запускайте, смотрите.
             public static readonly double[][] Fit =
             {
-                new double[] { 0, 0, 0, 0, 0, -90 },   // корпус — база
-                new double[] { 0, 0, 0, 0, 0, -90 },   // кабина — примерно над корпусом
-                new double[] { 0, -1.08, 0, 0, 0, -270 },   // двигатель — сзади
+                new double[] { 0, 0, 0, 0, 0, -90 },        // корпус — база
+                new double[] { 0, 0, 0, 0, 0, -90 },        // кабина — примерно над корпусом
+                new double[] { 0, -1.08, 0, 0, 0, -270 }    // двигатель — сзади
             };
 
             // Цвета: графит, чёрный, плазменный
@@ -53,10 +53,10 @@ namespace Snake3D
             {
                 new double[] { 0.08, 0.09, 0.11 },
                 new double[] { 0.03, 0.03, 0.04 },
-                new double[] { 0.45, 0.75, 1.00 },
+                new double[] { 1.00, 0.20, 0.15 }
             };
 
-            public static readonly string[] Material = { "STEEL", "SHINY_PLASTIC", "PLASTIC" };
+            public static readonly string[] Material = { "STEEL", "SHINY_PLASTIC", "SHINY_PLASTIC" };
 
         }
     }

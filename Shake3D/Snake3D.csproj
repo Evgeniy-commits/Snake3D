@@ -21,6 +21,12 @@
 		<None Remove="image\Logo.png" />
 		<None Remove="image\Shatl.jpg" />
 		<None Remove="image\space-shuttle.jpg" />
+		<None Remove="models\Cockpit.stp" />
+		<None Remove="models\Crystall.stp" />
+		<None Remove="models\Engine.stp" />
+		<None Remove="models\Mine.stp" />
+		<None Remove="models\Shatl.stp" />
+		<None Remove="models\Tail.stp" />
 		<Page Include="App.xaml" />
 	</ItemGroup>
 
@@ -29,6 +35,24 @@
 	  <Resource Include="image\Logo.png" />
 	  <Resource Include="image\Shatl.jpg" />
 	  <Resource Include="image\space-shuttle.jpg" />
+	  <Content Include="models\Cockpit.stp">
+	    <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+	  </Content>
+	  <Content Include="models\Crystall.stp">
+	    <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+	  </Content>
+	  <Content Include="models\Engine.stp">
+	    <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+	  </Content>
+	  <Content Include="models\Mine.stp">
+	    <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+	  </Content>
+	  <Content Include="models\Shatl.stp">
+	    <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+	  </Content>
+	  <Content Include="models\Tail.stp">
+	    <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+	  </Content>
 	</ItemGroup>
 
 </Project>

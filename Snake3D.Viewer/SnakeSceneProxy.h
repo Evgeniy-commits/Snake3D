@@ -74,6 +74,10 @@
 #include <NCollection_DataMap.hxx>
 #include <gp_Trsf.hxx>
 
+//Super кристаллы - оболочка
+#include <gp_Circ.hxx>
+
+
 #include <msclr/marshal_cppstd.h>
 
 #pragma comment(lib, "TKernel.lib")
@@ -129,6 +133,9 @@ namespace Snake3DViewer
 		std::vector<gp_Pnt>* _positions;
 		std::vector<Handle(AIS_Shape)>* _crystals;
 		std::vector<gp_Pnt>* _crystalBase;
+		std::vector<Handle(AIS_Shape)>* _superCrystals;
+		std::vector<gp_Pnt>* _superBase;
+		std::vector<Handle(AIS_Shape)>* _superSpheres;
 		std::vector<Handle(AIS_Shape)>* _mines;
 		std::vector<gp_Pnt>* _mineBase;
 		std::vector<TopoDS_Shape*>* _models;            // 0=голова, 1=хвост, 2=кристалл, 4=мина
@@ -230,6 +237,9 @@ namespace Snake3DViewer
 			_positions = new std::vector<gp_Pnt>();
 			_crystals = new std::vector<Handle(AIS_Shape)>();
 			_crystalBase = new std::vector<gp_Pnt>();
+			_superCrystals = new std::vector<Handle(AIS_Shape)>();
+			_superSpheres = new std::vector<Handle(AIS_Shape)>();
+			_superBase = new std::vector<gp_Pnt>();
 			_mines = new std::vector<Handle(AIS_Shape)>();
 			_mineBase = new std::vector<gp_Pnt>();
 			_models = new std::vector<TopoDS_Shape*>();
@@ -274,10 +284,13 @@ namespace Snake3DViewer
 			delete _headModel; _headModel = nullptr;
 
 			delete _crystals; _crystals = nullptr;
+			delete _superCrystals; _superCrystals = nullptr;
+			delete _superSpheres; _superSpheres = nullptr;
 
 			for (auto* m : *_models) delete m;
 			delete _models;        _models = nullptr;
 			delete _crystalBase;   _crystalBase = nullptr;
+			delete _superBase;	   _superBase = nullptr;
 			delete _mines;         _mines = nullptr;
 			delete _mineBase;      _mineBase = nullptr;
 			delete _segmentDirs;   _segmentDirs = nullptr;
@@ -298,10 +311,13 @@ namespace Snake3DViewer
 			delete _headModel; _headModel = nullptr;
 
 			delete _crystals; _crystals = nullptr;
+			delete _superCrystals; _superCrystals = nullptr;
+			delete _superSpheres; _superSpheres = nullptr;
 
 			for (auto* m : *_models) delete m;
 			delete _models;        _models = nullptr;
 			delete _crystalBase;   _crystalBase = nullptr;
+			delete _superBase;	   _superBase = nullptr;
 			delete _mines;         _mines = nullptr;
 			delete _mineBase;      _mineBase = nullptr;
 			delete _segmentDirs;   _segmentDirs = nullptr;
@@ -318,11 +334,11 @@ namespace Snake3DViewer
 		//Методы LoadStepModel(path, kind, targetSize) и LoadHeadModel(path, targetRadius) 
 		//решают одну задачу : привести произвольную CAD - модель к единому «игровому» 
 		//масштабу и ориентации.
-		//kind: 1=хвост, 2=кристалл, 4=мина. targetSize — габарит модели в единицах 
+		//kind: 1=хвост, 2=кристалл, 4=мина, 8=супер-кристалл. targetSize — габарит модели в единицах 
 		//арены.
 		bool LoadStepModel(System::String^ path, int kind, double targetSize)
 		{
-			if (kind < 0 || kind > 7) return false;
+			if (kind < 0 || kind > 8) return false;
 
 			msclr::interop::marshal_context ctx;
 			std::string nativePath = ctx.marshal_as<std::string>(path);
@@ -594,6 +610,7 @@ namespace Snake3DViewer
 			RemoveAllSnake();
 			ClearCrystals();
 			ClearMines();
+			ClearSuperCrystals();
 
 			for (NCollection_DataMap<int, Handle(AIS_Shape)>::Iterator it(*_shipParts);
 				it.More(); it.Next())
@@ -881,39 +898,6 @@ namespace Snake3DViewer
 			_aisContext()->UpdateCurrentViewer();
 		}
 
-		//void CreateArenaWalls(double size)
-		//{
-		//    double half = size / 2.0;
-		//    double step = size / 2.0;
-
-		//    // --- Задняя (Z = -half) и передняя (Z = +half) ---
-		//    for (double s = -half; s <= half + 0.001; s += step)
-		//    {
-		//        AddArenaLine(gp_Pnt(s, -half, -half), gp_Pnt(s, half, -half));
-		//        AddArenaLine(gp_Pnt(-half, s, -half), gp_Pnt(half, s, -half));
-		//        AddArenaLine(gp_Pnt(s, -half, half), gp_Pnt(s, half, half));
-		//        AddArenaLine(gp_Pnt(-half, s, half), gp_Pnt(half, s, half));
-		//    }
-
-		//    // --- Левая (X = -half) и правая (X = +half) ---
-		//    for (double s = -half; s <= half + 0.001; s += step)
-		//    {
-		//        AddArenaLine(gp_Pnt(-half, s, -half), gp_Pnt(-half, s, half));
-		//        AddArenaLine(gp_Pnt(-half, -half, s), gp_Pnt(-half, half, s));
-		//        AddArenaLine(gp_Pnt(half, s, -half), gp_Pnt(half, s, half));
-		//        AddArenaLine(gp_Pnt(half, -half, s), gp_Pnt(half, half, s));
-		//    }
-
-		//    // --- Пол (Y = -half) и потолок (Y = +half) ---
-		//    for (double s = -half; s <= half + 0.001; s += step)
-		//    {
-		//        AddArenaLine(gp_Pnt(s, -half, -half), gp_Pnt(s, -half, half));
-		//        AddArenaLine(gp_Pnt(-half, -half, s), gp_Pnt(half, -half, s));
-		//        AddArenaLine(gp_Pnt(s, half, -half), gp_Pnt(s, half, half));
-		//        AddArenaLine(gp_Pnt(-half, half, s), gp_Pnt(half, half, s));
-		//    }
-		//}
-
 		void AddArenaLine(const gp_Pnt& p1, const gp_Pnt& p2)
 		{
 			BRepBuilderAPI_MakeEdge edge(p1, p2);
@@ -967,10 +951,94 @@ namespace Snake3DViewer
 			_aisContext()->Display(aisShape, Standard_True);
 		}
 
+		void AddSuperCrystalAt(double x, double y, double z, double radius)
+		{
+			gp_Pnt center(x, y, z);
+			Handle(AIS_Shape) aisShape;
+			TopoDS_Shape* model = GetModel(8);
+
+			if (model != nullptr)
+			{
+				aisShape = new AIS_Shape(*model);
+				aisShape->SetColor(Quantity_Color(0.55, 0.15, 0.95, Quantity_TOC_RGB)); // глубокий фиолетовый
+				aisShape->SetTransparency(0.25);
+			}
+			else
+			{
+				// Модель не загрузилась — fallback: крупная сфера того же цвета
+				BRepPrimAPI_MakeSphere big(center, radius * 2.0);
+				aisShape = new AIS_Shape(big.Shape());
+				aisShape->SetColor(Quantity_Color(0.55, 0.15, 0.95, Quantity_TOC_RGB));
+			}
+			aisShape->SetDisplayMode(1);
+
+			// Супер-кристаллы добавляются строго в конец: RemoveSuperCrystalAt
+			// делает erase по индексу, и списки должны оставаться плотными
+			_superCrystals->push_back(aisShape);
+			_superBase->push_back(center);
+
+			if (model != nullptr)
+			{
+				gp_Trsf trans;
+				trans.SetTranslation(gp_Vec(gp_Pnt(0, 0, 0), center));
+				aisShape->SetLocalTransformation(trans);
+			}
+
+			// Standard_False: спавн заменяет сразу три кристалла,
+			// перерисовку делает общий Redraw() игрового кадра
+			_aisContext()->Display(aisShape, Standard_False);
+
+			// Оболочка: полупрозрачная сфера + «клетка» из трёх больших кругов.
+			// Вращать идеально гладкую сферу бессмысленно — геометрия симметрична,
+			// вращение видно только когда есть структура: круги и дают эту структуру.
+			// Всё строится в нуле: позицию подставит трансформация из UpdateCrystalOrientations.
+			const double shellR = radius * 4.0;
+			const double cageR = shellR * 0.9;   // клетка чуть меньше сферы
+
+			TopoDS_Compound shell;
+			BRep_Builder bb;
+			bb.MakeCompound(shell);
+			bb.Add(shell, BRepPrimAPI_MakeSphere(shellR).Shape());
+
+			for (int k = 0; k < 3; ++k)
+			{
+				static const double axes[3][3] = { {0, 0, 1}, {0, 1, 0}, {1, 0, 0} };
+				gp_Ax2 ax(gp_Pnt(0, 0, 0), gp_Dir(axes[k][0], axes[k][1], axes[k][2]));
+				gp_Circ circ(ax, cageR);
+				bb.Add(shell, BRepBuilderAPI_MakeEdge(circ).Edge());
+			}
+
+			Handle(AIS_Shape) sphereShape = new AIS_Shape(shell);
+			sphereShape->SetColor(Quantity_Color(0.55, 0.15, 0.95, Quantity_TOC_RGB));
+			sphereShape->SetTransparency(0.55); // было 0.85 — оболочка плотнее
+			_aisContext()->Display(sphereShape, Standard_False);
+
+			// Стартовая позиция: до первого кадра вращения оболочка не должна
+			// висеть в начале координат арены
+			gp_Trsf init;
+			init.SetTranslation(gp_Vec(gp_Pnt(0, 0, 0), center));
+			sphereShape->SetLocalTransformation(init);
+
+			_superSpheres->push_back(sphereShape);
+		}
+
+		void ClearSuperCrystals()
+		{
+			for (auto& s : *_superCrystals)
+				if (!s.IsNull() && !_aisContext().IsNull())
+					_aisContext()->Erase(s, Standard_False);
+			for (auto& sp : *_superSpheres)
+				if (!sp.IsNull() && !_aisContext().IsNull())
+					_aisContext()->Erase(sp, Standard_False);
+			_superCrystals->clear();
+			_superSpheres->clear();
+			_superBase->clear();
+		}
+
 		// Ориентирует все кристаллы 
 		void UpdateCrystalOrientations()
 		{
-			if (_crystals->empty()) return;
+			if ((_crystals->empty() && _superCrystals->empty())) return;
 			if (_aisContext().IsNull()) return;
 
 			gp_Dir fwd(_dirX, _dirY, _dirZ);
@@ -1027,6 +1095,42 @@ namespace Snake3DViewer
 				(*_crystals)[i]->SetLocalTransformation(trsf);
 				//_aisContext()->Redisplay((*_crystals)[i], Standard_False);
 			}
+
+			for (size_t i = 0; i < _superCrystals->size(); ++i)
+			{
+				if ((*_superCrystals)[i].IsNull()) continue;
+
+				gp_Pnt pos = (*_superBase)[i];
+
+				if (!InView(pos.X(), pos.Y(), pos.Z(), 200.0)) continue;
+
+				gp_Trsf trsf;
+				trsf.SetValues(
+					rightR.X(), fwdR.X(), up.X(), pos.X(),
+					rightR.Y(), fwdR.Y(), up.Y(), pos.Y(),
+					rightR.Z(), fwdR.Z(), up.Z(), pos.Z());
+
+				(*_superCrystals)[i]->SetLocalTransformation(trsf);
+			}
+
+			// Оболочки супер-кристаллов: та же матрица, что у кристалла —
+			// клетка вращается синхронно с ним, сфера внутри вращения не заметна
+			// (и не должна: она симметрична), но круги дают эффект живого вращения.
+			for (size_t i = 0; i < _superSpheres->size(); ++i)
+			{
+				if ((*_superSpheres)[i].IsNull()) continue;
+
+				gp_Pnt pos = (*_superBase)[i];
+				if (!InView(pos.X(), pos.Y(), pos.Z(), 200.0)) continue;
+
+				gp_Trsf trsf;
+				trsf.SetValues(
+					rightR.X(), fwdR.X(), up.X(), pos.X(),
+					rightR.Y(), fwdR.Y(), up.Y(), pos.Y(),
+					rightR.Z(), fwdR.Z(), up.Z(), pos.Z());
+
+				(*_superSpheres)[i]->SetLocalTransformation(trsf);
+			}
 		}
 
 		void UpdateSpin(double dt)
@@ -1044,6 +1148,23 @@ namespace Snake3DViewer
 			_crystals->erase(_crystals->begin() + index);
 			if (index < (int)_crystalBase->size())
 				_crystalBase->erase(_crystalBase->begin() + index);
+		}
+
+		void RemoveSuperCrystalAt(int index)
+		{
+			if (index < 0 || index >= static_cast<int>(_superCrystals->size())) return;
+			if (!_aisContext().IsNull())
+			{
+				if (!(*_superCrystals)[index].IsNull())
+					_aisContext()->Erase((*_superCrystals)[index], Standard_False);
+				if (index < (int)_superSpheres->size() && !(*_superSpheres)[index].IsNull())
+					_aisContext()->Erase((*_superSpheres)[index], Standard_False);
+			}
+			_superCrystals->erase(_superCrystals->begin() + index);
+			if (index < (int)_superSpheres->size())
+				_superSpheres->erase(_superSpheres->begin() + index);
+			if (index < (int)_superBase->size())
+				_superBase->erase(_superBase->begin() + index);
 		}
 
 		void RemoveMineAt(int index)
@@ -1346,7 +1467,17 @@ namespace Snake3DViewer
 		{
 			if (_view().IsNull()) return;
 			Handle(Graphic3d_Camera) cam = _view()->Camera();
-			cam->SetScale(cam->Scale() / factor);
+
+			double newScale = cam->Scale() / factor;         // scale меньше — вид ближе
+
+			// Пределы: минимум ~2 единицы мира (достаточно, чтобы рассмотреть корабль
+			// в деталях), максимум — арена с запасом
+			double minScale = 2.0;
+			double maxScale = _arenaHalf > 0.0 ? _arenaHalf * 4.0 : 2000.0;
+			if (newScale < minScale) newScale = minScale;
+			if (newScale > maxScale) newScale = maxScale;
+
+			cam->SetScale(newScale);
 			_view()->Redraw();
 		}
 
@@ -1358,6 +1489,17 @@ namespace Snake3DViewer
 		void Rotate(int x, int y)
 		{
 			if (!_view().IsNull()) _view()->Rotation(x, y);
+		}
+
+		void StartHeadOrbit(int x, int y)
+		{
+			if (_view().IsNull()) return;
+			if (_positions == nullptr || _positions->empty()) return;
+
+			Handle(Graphic3d_Camera) cam = _view()->Camera();
+			cam->SetCenter((*_positions)[0]);   // ось вращения — голова змейки
+
+			_view()->StartRotation(x, y);
 		}
 
 		void StartRotate(int x, int y)
@@ -1385,51 +1527,6 @@ namespace Snake3DViewer
 			if (!_view().IsNull())
 				_view()->SetBackgroundColor(Quantity_TOC_RGB, (float)r / 255, (float)g / 255, (float)b / 255);
 		}
-
-		//void RemoveSegment(int index)
-		//{
-		//	// 1. Проверка границ
-		//	if (index < 0 || index >= static_cast<int>(_snakeSegments->size()))
-		//		return;
-
-		//	// 2. Получаем указатель на объект AIS_Shape
-		//	Handle(AIS_Shape) shapeToRemove = (*_snakeSegments)[index];
-
-		//	// 3. Удаляем объект из контекста отображения (это убирает его с экрана)
-		//	if (!_aisContext().IsNull())
-		//	{
-		//		_aisContext()->Erase(shapeToRemove, Standard_False);
-		//	}
-
-		//	// 4. Удаляем ссылку из нашего локального вектора
-		//	// erase сдвинет все последующие элементы влево на 1 позицию
-		//	_snakeSegments->erase(_snakeSegments->begin() + index);
-		//	_basePositions->erase(_basePositions->begin() + index);
-		//	_positions->erase(_positions->begin() + index);
-
-		//	//_segmentDirs параллелен _positions по индексам.
-		//	// Без этой строки после первого удаления направления
-		//	// поедут: dir[i] начнёт указывать на чужой сегмент,
-		//	// и модели хвоста развернутся не туда.
-		//	_segmentDirs->erase(_segmentDirs->begin() + index);
-
-		//	// 5. ВАЖНО: В OCCT индексы в векторе должны совпадать с логикой C#
-		//	// Так как мы используем erase, элементы после удаленного автоматически сдвинулись.
-		//	// Нам НЕ нужно вызывать MoveSegment для обновления индексов, 
-		//	// потому что в C# мы будем обращаться к ним по новым индексам.
-		//	// Однако, если в C# вы храните старые индексы, логика сломается.
-		//	// При правильной реализации в C# (сдвиг списка перед удалением) это сработает идеально.
-		//}
-
-		//void RemoveFood()
-		//{
-		//    // Удаляем еду из контекста, если она существует
-		//    if (!_foodShape().IsNull() && !_aisContext().IsNull())
-		//    {
-		//        _aisContext()->Erase(_foodShape(), Standard_False);
-		//        _foodShape() = Handle(AIS_Shape)(); // Обнуляем хендл
-		//    }
-		//}
 
 		void RemoveAllSnake()
 		{
@@ -1485,7 +1582,13 @@ namespace Snake3DViewer
 
 		bool IsCockpitView() { return _viewMode == 1; }
 
-		void FollowHead(int headIndex)
+		//void FollowHead(int headIndex);
+		//void FollowHead(int headIndex, bool snap);  //Перегружаем метод
+		void SnakeSceneProxy::FollowHead(int headIndex)
+		{
+			FollowHead(headIndex, false);
+		}
+		void SnakeSceneProxy::FollowHead(int headIndex, bool snap)
 		{
 			if (headIndex < 0 || _snakeSegments == nullptr) return;
 			if ((size_t)headIndex >= _snakeSegments->size()) return;
@@ -1507,7 +1610,7 @@ namespace Snake3DViewer
 				camUp = 1.0;    // немного выше оси, видно "капот"
 				lookAhead = 30.0;   // далеко вперёд — хороший обзор арены
 				fov = 75.0;   // широкое поле зрения
-				lerpSpeed = 1.0;    // быстрый лерп, кабина не отстаёт от поворотов
+				lerpSpeed = 1.0;    // быстрый лерп, кабина не отстаёт от поворотов				
 			}
 			else
 			{
@@ -1516,9 +1619,9 @@ namespace Snake3DViewer
 				camUp = 3.0;
 				lookAhead = 10.0;
 				fov = 45.0;
-				lerpSpeed = 0.05;
+				lerpSpeed = 0.05;				
 			}
-
+			if (snap) lerpSpeed = 1.0;
 			// Геометрия камеры жёсткая: глаз на фиксированном отлёте и высоте,
 			// взгляд строго по курсу. Никакого лерпа — плавность даёт
 			// интерполяция позиций змейки на стороне C#.
@@ -1720,6 +1823,16 @@ namespace Snake3DViewer
 
 			// cos(70°) ≈ 0.342 — конус с запасом вокруг реального FOV ~60°
 			return (dx * _camDirX + dy * _camDirY + dz * _camDirZ) / dist > 0.342;
+		}
+
+		//Отладочное
+		property int SuperCount
+		{
+			int get()
+			{
+				if (_superCrystals == nullptr) return 0;
+				return (int)_superCrystals->size();
+			}
 		}
 	};
 }

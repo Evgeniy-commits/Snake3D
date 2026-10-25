@@ -136,7 +136,7 @@ namespace Snake3D
 
         public GameMode Mode => _mode;
         public int MissionTotal => _missionTotal;
-        public int MissionLeft => _crystals.Count;
+        public int MissionLeft => _crystals.Count + _superCrystals.Count;
         public double PlayTime => _playTime;
 
         public event EventHandler? Victory;
@@ -173,6 +173,20 @@ namespace Snake3D
         private int _mineCount = GameConfig.DefaultMineCount;
         private int _crystalCount = GameConfig.DefaultCrystalCount;
 
+        // Супер-кристаллы: три штуки, всплывают после 10 съеденных обычных,
+        // живут минуту, затем возвращаются в пул обычных
+        public const int SuperCrystalScore = 20;
+        private const int SuperBatchCount = 3;
+        private const int SuperTriggerCount = 10;
+        private const double SuperDuration = 60.0;
+
+        private readonly List<Point3D> _superCrystals = new();
+        public IReadOnlyList<Point3D> SuperCrystals => _superCrystals;
+
+        private bool _superActive;      // окно супер-кристаллов открыто
+        private double _superTimer;     // сколько осталось до конца окна
+        private int _eatenSinceSuper;   // счётчик съеденных обычных (идёт только при закрытом окне)
+
         //Для замера производительности
 
         private readonly System.Diagnostics.Stopwatch _renderWatch = new();
@@ -199,8 +213,10 @@ namespace Snake3D
             _foodRadius = foodRadius;
             _segments = new List<Point3D>();
 
+            string modelsDir = @"models\";
+
             // Загрузка модели головы — один раз, до первого Reset()
-            bool ok = _proxy.LoadHeadModel(@"C:\Users\Admin\source\repos\Shake3D\models\Shatl.stp", 0.75 * segmentRadius);
+            bool ok = _proxy.LoadHeadModel(System.IO.Path.Combine(modelsDir, "Shatl.stp"), 0.75 * segmentRadius);
             if (!ok)
             {
                 // Файл не прочитался — AddSegment сам откатится на fallback-капсулу,
@@ -208,12 +224,15 @@ namespace Snake3D
                 System.Diagnostics.Trace.WriteLine("Не удалось загрузить модель головы, будет fallback-капсула");
             }
 
-            string modelsDir = @"C:\Users\Admin\source\repos\Shake3D\models\";
             // Загрузка моделей хвоста, кристалла и мины — один раз, до первого Reset()
 
             bool tailOk = _proxy.LoadStepModel(System.IO.Path.Combine(modelsDir, "Tail.stp"), 1, segmentRadius * 1.5);
             bool crystalOk = _proxy.LoadStepModel(System.IO.Path.Combine(modelsDir, "Crystall.stp"), 2, foodRadius * 2.0);
             bool mineOk = _proxy.LoadStepModel(System.IO.Path.Combine(modelsDir, "Mine.stp"), 4, foodRadius * 1.5);
+            
+            // Супер-кристалл: та же модель Crystall.stp, id 8, крупнее обычного
+            bool superOk = _proxy.LoadStepModel(System.IO.Path.Combine(modelsDir, "Crystall.stp"), 8, foodRadius * 3.5);
+            System.Diagnostics.Trace.WriteLine($"Супер-кристалл: {superOk}");
 
             System.Diagnostics.Trace.WriteLine($"Модели: tail={tailOk} crystal={crystalOk} mine={mineOk}");
 
@@ -379,6 +398,10 @@ namespace Snake3D
             // Кристаллы и мины: раскладка по счётчикам из меню.
             // Списки чистим и заполняем заново — рестарт с нулём старых объектов.
             _crystals.Clear();
+            _superCrystals.Clear();
+            _superActive = false;
+            _superTimer = 0.0;
+            _eatenSinceSuper = 0;
             EnsureCrystals();
 
             _mines.Clear();
@@ -527,11 +550,37 @@ namespace Snake3D
                     else
                         SpawnMines(GameConfig.MinesPerCristal);  // миссия: расплата минами
 
-                    if (_mode == GameMode.Mission && _crystals.Count == 0)
+                    // Отсчёт до спавна супер-кристаллов: идёт только пока окно закрыто
+                    if (!_superActive)
+                    {
+                        _eatenSinceSuper++;
+                        if (_eatenSinceSuper >= SuperTriggerCount)
+                            TrySpawnSuperCrystals();
+                    }
+
+                    if (_mode == GameMode.Mission && _crystals.Count == 0 && _superCrystals.Count == 0)
                     {
                         TriggerVictory();
                         return true;
                     }
+                    break;
+                }
+            }
+
+            // Супер-кристаллы: коллизии те же, что у обычного, награда 20
+            for (int i = 0; i < _superCrystals.Count; i++)
+            {
+                if (Distance(newHead, _superCrystals[i]) <= _segmentRadius + _foodRadius + tolerance)
+                {
+                    Score += SuperCrystalScore;
+                    ScoreChanged?.Invoke(this, Score);
+
+                    _proxy.RemoveSuperCrystalAt(i);
+                    _superCrystals.RemoveAt(i);
+
+                    if (_mode == GameMode.FreeHunt)
+                        EnsureCrystals();   // съеденный супер заменяется обычным
+
                     break;
                 }
             }
@@ -666,6 +715,8 @@ namespace Snake3D
                     Update();
                     _logicAccumulator -= LogicInterval;
                 }
+
+                TickSuperCrystals(dt);   // минута супер-кристаллов: тикает пока игра активна
             }
 
             _pulsePhase += dt * (2.0 * Math.PI / 0.4);
@@ -696,6 +747,7 @@ namespace Snake3D
                 double cameraAvg = _tCamera / _frameCount;
                 double redrawAvg = _tRedraw / _frameCount;
                 int segments = _segments.Count, crystals = _crystals.Count, mines = _mines.Count;
+                int supers = _proxy.SuperCount;
 
                 _frameMsSum = 0;
                 _logicMsSum = 0;
@@ -707,7 +759,8 @@ namespace Snake3D
                     $"Кадр: {frameAvg:F2} | логика: {logicAvg:F2} | рендер: {tRender:F2} | кристаллы: {crystalsAvg:F2} " +
                     $"| сегменты: {segmentsAvg:F2} | камера: {cameraAvg:F2} | Redraw: {redrawAvg:F2} " +
                     $"| FPS: {1.0 / dtAvg:F1} | объекты: {segments}+{crystals}+{mines}" +
-                    $"| голова: {headAvg:F2}");
+                    $"| голова: {headAvg:F2}" +
+                    $"| супер: {supers}");
             }
         }
 
@@ -783,7 +836,8 @@ namespace Snake3D
             _tSegments += _watch.Elapsed.TotalMilliseconds;
 
             _watch.Restart();
-            _proxy.FollowHead(0);   // камера — ПОСЛЕ перемещения всех объектов
+            if (!SuppressCamera)            // свободная камера: не трогаем eye/center/up
+                _proxy.FollowHead(0);       // камера — ПОСЛЕ перемещения всех объектов
             _watch.Stop();
             _tCamera += _watch.Elapsed.TotalMilliseconds;
 
@@ -936,6 +990,10 @@ namespace Snake3D
                     foreach (var m in _mines)
                         if (Distance(p, m) < _foodRadius * 2 + 2.0) { free = false; break; }
 
+                if (free)
+                    foreach (var s in _superCrystals)
+                        if (Distance(p, s) < _foodRadius * 2 + 2.0) { free = false; break; }
+
                 if (free) return p;
             }
             // не нашли за 200 попыток — ставим куда угодно в пределах
@@ -947,7 +1005,9 @@ namespace Snake3D
 
         private void EnsureCrystals()
         {
-            while (_crystals.Count < _crystalCount)
+            // Сумма обычных и супер не должна превышать норму поля —
+            // иначе во время окна кристаллы начнут размножаться
+            while (_crystals.Count + _superCrystals.Count < _crystalCount)
             {
                 Point3D p = FindFreeSpot();
                 _crystals.Add(p);
@@ -973,6 +1033,56 @@ namespace Snake3D
                 _mines.Add(p);
                 _proxy.AddMineAt(_mines.Count - 1, p.X, p.Y, p.Z, _foodRadius);
             }
+        }
+
+        // Спавн супер-кристаллов: три обычных случайных заменяются крупными фиолетовыми.
+        // Сумма кристаллов на поле не меняется — счёт не дёргается.
+        private void TrySpawnSuperCrystals()
+        {
+            if (_superActive) return;
+            if (_crystals.Count < SuperBatchCount) return;   // заменять нечего — ждём следующего съеденного
+
+            // Три случайных разных индекса; удаляем по убыванию, чтобы не сдвинуть невыданные
+            var picked = new List<int>();
+            while (picked.Count < SuperBatchCount)
+            {
+                int k = _rand.Next(_crystals.Count);
+                if (!picked.Contains(k)) picked.Add(k);
+            }
+            picked.Sort((a, b) => b.CompareTo(a));
+
+            foreach (int idx in picked)
+            {
+                Point3D p = _crystals[idx];
+                _crystals.RemoveAt(idx);
+                _proxy.RemoveCrystalAt(idx);
+                _superCrystals.Add(p);
+                _proxy.AddSuperCrystalAt(p.X, p.Y, p.Z, _foodRadius);
+            }
+
+            _superActive = true;
+            _superTimer = SuperDuration;
+            _eatenSinceSuper = 0;   // новый отсчёт начнётся только после конца минуты
+        }
+
+        // Таймер окна: выжившие супер-кристаллы возвращаются в пул обычных.
+        // Вызывается из Frame — на паузе и после проигрыша минута замирает.
+        private void TickSuperCrystals(double dt)
+        {
+            if (!_superActive) return;
+
+            _superTimer -= dt;
+            if (_superTimer > 0) return;
+
+            for (int i = 0; i < _superCrystals.Count; i++)
+            {
+                Point3D p = _superCrystals[i];
+                _proxy.RemoveSuperCrystalAt(i);
+                _crystals.Add(p);
+                _proxy.AddCrystalAt(_crystals.Count - 1, p.X, p.Y, p.Z, _foodRadius);
+            }
+            _superCrystals.Clear();
+            _superActive = false;
         }
 
         private void TriggerVictory()

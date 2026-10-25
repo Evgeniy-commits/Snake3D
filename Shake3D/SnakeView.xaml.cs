@@ -43,8 +43,13 @@ namespace Snake3D
         private bool _runSaved;
         private bool _markersOn = false;
 
+        // Свободная камера: до старта, на паузе, после конца партии
+        private bool CameraFree =>
+            _game == null || !_game.IsRunning || _game.IsPaused;
+
         //Мышь
-        private bool _rotating;
+        private bool _rotating;   // орбита — правая кнопка
+        private bool _panning;    // пан — левая кнопка
         private Point _winLastPos;
 
         //Замеры производительности
@@ -165,10 +170,11 @@ namespace Snake3D
                 // 5. Опции ДО Reset: сцена строится сразу с учётом выбора (мины, кристаллы, стены)
                 _game.ApplyOptions(opt);
                 _game.Reset();
-                _viewport.Proxy!.FitScene();
+                //_viewport.Proxy!.FitScene();
                 _viewport.Proxy!.SetBackgroundColor(2, 2, 5);
                 _viewport.Proxy!.SetViewMode(opt.CockpitView ? 1 : 0);
-                //_game.Start();
+                for (int i = 0; i < 200; i++)        // дотягиваем лерп до конца
+                    _viewport.Proxy!.FollowHead(0);
                 StatusText.Text = "Space - старт";
 
                 // 6. Мышь — на WinForms-события контрола (airspace: WPF-события
@@ -226,17 +232,31 @@ namespace Snake3D
             switch (e.Key)
             {
                 case Key.Space:
-                    if (_game.IsGameOver || _finished)
+                    if (_game.IsPaused)                    
+                    {
+                        _game.TogglePause();
+                        _viewport?.Proxy!.FollowHead(0, snap: true);   // камеру за голову мгновенно
+                        StatusText.Text = "Идёт игра!";
+                        break;
+                    }
+                    else if (_game.IsGameOver || _finished)
                     {
                         _finished = false;
                         _game.Reset();
                         _viewport?.Proxy?.FitScene();                        
                         _game.Start();
+                        //_viewport?.Proxy!.FollowHead(0);
                         StatusText.Text = "Идёт игра!";
+                    }
+                    else if (_game.IsRunning)
+                    {
+                        _game.TogglePause();                    // ← Space паузит на ходу
+                        StatusText.Text = "Пауза — SPACE чтобы продолжить";
                     }
                     else if (!_game.IsRunning)
                     {
                         _game.Start();
+                        //_viewport?.Proxy!.FollowHead(0);
                         StatusText.Text = "Идёт игра!";
                     }
                     break;
@@ -247,6 +267,8 @@ namespace Snake3D
                 case Key.E:
                     if (e.IsRepeat) break;
                     _viewport?.Proxy?.ToggleViewMode();
+                    if (CameraFree)
+                        _viewport?.Proxy?.FollowHead(0, snap: true);
                     break;
                 case Key.P:
                     if (e.IsRepeat) break;
@@ -292,7 +314,8 @@ namespace Snake3D
                             _game.ApplyOptions(menu.Options);
                             _game.Reset();
                             _viewport?.Proxy?.FitScene();                           
-                            _viewport.Proxy!.SetViewMode(menu.Options.CockpitView ? 1 : 0);
+                            _viewport?.Proxy!.SetViewMode(menu.Options.CockpitView ? 1 : 0);
+                            //_viewport?.Proxy!.FollowHead(0);
                             StatusText.Text = "Space — старт";
                         }
                         else
@@ -341,6 +364,8 @@ namespace Snake3D
             _onFrameWatch.Restart();
 
             if (_game == null) return;
+
+            _game.SuppressCamera = CameraFree;   // рендер узнаёт режим камеры до кадра
 
             var now = _frameClock.Elapsed;
             double dt = (now - _lastElapsed).TotalSeconds;
@@ -435,7 +460,6 @@ namespace Snake3D
             _hud.PlaceCrosshair(ViewportHost.ActualWidth / 2, ViewportHost.ActualHeight / 2);
         }
 
-        //мышь на WinForms-события
         private void Viewport_WinMouseDown(object sender, WF.MouseEventArgs e)
         {
             if (_viewport?.Proxy == null) return;
@@ -443,46 +467,56 @@ namespace Snake3D
             // MouseWheel в WinForms уходит только контролу в фокусе
             _viewport.Focus();
 
+            if (!CameraFree) return;        // игра идёт — мышь на камеру не влияет
+
+            int vy = _viewport.Height - e.Y;   // OCCT: ось Y снизу вверх
+
             if (e.Button == WF.MouseButtons.Left)
             {
+                _panning = true;
+                _winLastPos = new Point(e.X, e.Y);   // чтобы первый Pan не дёргался
+            }
+            else if (e.Button == WF.MouseButtons.Right)
+            {
                 _rotating = true;
-                if (_game != null) _game.SuppressCamera = true;
-
-                int vy = _viewport.Height - e.Y;   // OCCT: ось Y снизу вверх
-                _viewport.Proxy.StartRotate(e.X, vy);
+                _viewport.Proxy.StartHeadOrbit(e.X, vy);
             }
         }
 
         private void Viewport_WinMouseMove(object sender, WF.MouseEventArgs e)
         {
-            if (_viewport?.Proxy == null || !_rotating) return;
+            if (_viewport?.Proxy == null) return;
+            if (!_panning && !_rotating) return;
+            if (!CameraFree) { _panning = _rotating = false; return; }   // стартовали прямо во время действия
 
-            int vx = e.X;
             int vy = _viewport.Height - e.Y;
 
-            if (e.Button == WF.MouseButtons.Left)
+            if (_panning && e.Button == WF.MouseButtons.Left)
             {
-                _viewport.Proxy.Rotate(vx, vy);
-            }
-            else if (e.Button == WF.MouseButtons.Middle)
-            {
-                // Pan: смещение в координатах OCCT — по Y знак переворачивается
+                // Пан: смещение в координатах OCCT — по Y знак переворачивается
                 _viewport.Proxy.Pan(e.X - (int)_winLastPos.X, (int)_winLastPos.Y - e.Y);
             }
+            else if (_rotating && e.Button == WF.MouseButtons.Right)
+            {
+                _viewport.Proxy.Rotate(e.X, vy);
+            }
+            else return;
 
             _winLastPos = new Point(e.X, e.Y);
         }
 
         private void Viewport_WinMouseUp(object sender, WF.MouseEventArgs e)
         {
+            _panning = false;
             _rotating = false;
-            if (_game != null) _game.SuppressCamera = false;
+            // SuppressCamera больше не трогаем — им управляет CameraFree в OnFrame
         }
 
         private void Viewport_WinMouseWheel(object sender, WF.MouseEventArgs e)
         {
             if (_viewport?.Proxy == null) return;
-            double factor = e.Delta > 0 ? 1.1 : 1.0 / 1.1;
+            if (!CameraFree) return;
+            double factor = Math.Pow(1.25, e.Delta / 120.0);
             _viewport.Proxy.ZoomBy(factor);
         }
 
