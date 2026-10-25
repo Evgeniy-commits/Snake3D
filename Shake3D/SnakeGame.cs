@@ -202,6 +202,11 @@ namespace Snake3D
         private double _dtSum;
         private double _tHead;
 
+        //Звуки
+        public event Action? CrystalEaten;
+        public event Action? MineHit;
+        public event Action? SuperSpawned;
+
         public SnakeGame(SnakeSceneProxy proxy, double arenaSize, double gridStep,
                                             double segmentRadius, double foodRadius)
         {
@@ -558,6 +563,8 @@ namespace Snake3D
                             TrySpawnSuperCrystals();
                     }
 
+                    CrystalEaten?.Invoke();
+
                     if (_mode == GameMode.Mission && _crystals.Count == 0 && _superCrystals.Count == 0)
                     {
                         TriggerVictory();
@@ -574,12 +581,19 @@ namespace Snake3D
                 {
                     Score += SuperCrystalScore;
                     ScoreChanged?.Invoke(this, Score);
+                    
+                    CrystalEaten?.Invoke();
 
                     _proxy.RemoveSuperCrystalAt(i);
                     _superCrystals.RemoveAt(i);
 
                     if (_mode == GameMode.FreeHunt)
                         EnsureCrystals();   // съеденный супер заменяется обычным
+                    else if (_crystals.Count == 0 && _superCrystals.Count == 0)
+                    {
+                        TriggerVictory();
+                        return true;
+                    }
 
                     break;
                 }
@@ -592,6 +606,7 @@ namespace Snake3D
                     Score -= MineScore;
                     ScoreChanged?.Invoke(this, Score);
 
+                    MineHit?.Invoke();
                     _proxy.RemoveMineAt(i);
                     _mines.RemoveAt(i);
 
@@ -1063,6 +1078,8 @@ namespace Snake3D
             _superActive = true;
             _superTimer = SuperDuration;
             _eatenSinceSuper = 0;   // новый отсчёт начнётся только после конца минуты
+
+            SuperSpawned?.Invoke();
         }
 
         // Таймер окна: выжившие супер-кристаллы возвращаются в пул обычных.

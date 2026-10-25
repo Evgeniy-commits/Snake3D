@@ -1,4 +1,5 @@
-﻿using System.Windows;
+﻿using Microsoft.VisualBasic.Devices;
+using System.Windows;
 
 namespace Snake3D
 {
@@ -26,15 +27,8 @@ namespace Snake3D
             DarkTitle.Apply(this);
             InitializeComponent();
 
-            _pauseMode = pauseMode;
-
-            //if (pauseMode)
-            //{
-            //    Title = "Пауза";
-            //    BtnHunt.Visibility = Visibility.Collapsed;
-            //    BtnMission.Visibility = Visibility.Collapsed;
-            //    // дальше по вкусам: скрыть OptArena/OptGrid (они требуют рестарта)
-            //}
+            _pauseMode = pauseMode;           
+            
             PreviewKeyDown += (s, e) =>
             {
                 if (e.Key != System.Windows.Input.Key.Escape || e.IsRepeat) return;
@@ -64,6 +58,8 @@ namespace Snake3D
 
         private void BtnExit_Click(object sender, RoutedEventArgs e)
         {
+            Audio.Service.StopMusic();
+            Audio.Service.StopFlight();
             DialogResult = false;   // ShowMenu увидит false и сам закроет главное окно
         }
 
@@ -77,6 +73,8 @@ namespace Snake3D
         {
             CollectOptions();
             Options.Mode = GameMode.FreeHunt;
+            Audio.Service.StartMusic();
+            Audio.Service.PlaySfx("start");
             DialogResult = true; 
         }
 
@@ -84,12 +82,36 @@ namespace Snake3D
         {
             CollectOptions();
             Options.Mode = GameMode.Mission;
+            Audio.Service.StartMusic();
+            Audio.Service.PlaySfx("start");
             DialogResult = true;
         }
 
         private void BtnScores_Click(object sender, RoutedEventArgs e)
         {
             new HighScoresWindow { Owner = this }.ShowDialog();
+        }
+
+        private void OptAudio_Changed(object sender, RoutedEventArgs e)
+        {
+            // Checked срабатывает уже во время InitializeComponent (IsChecked="True"),
+            // когда не все контролы ещё созданы — ждём полной загрузки
+            if (OptMusic == null || OptSfx == null) return;
+
+            Audio.Service.SetMusicEnabled(OptMusic.IsChecked == true);
+            Audio.Service.SetSfxEnabled(OptSfx.IsChecked == true);
+        }
+
+        private void OptMusicVol_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+        {
+            if (MusicVolLabel != null) MusicVolLabel.Text = ((int)e.NewValue).ToString();
+            Audio.Service.SetMusicVolume(e.NewValue / 100.0);
+        }
+
+        private void OptSfxVol_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+        {
+            if (SfxVolLabel != null) SfxVolLabel.Text = ((int)e.NewValue).ToString();
+            Audio.Service.SetSfxVolume(e.NewValue / 100.0);
         }
     }
 }

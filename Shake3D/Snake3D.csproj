@@ -17,6 +17,21 @@
 
 	<ItemGroup>
 		<ApplicationDefinition Remove="App.xaml" />
+		<None Remove="audio\music\PPK_-_Perezagruzka_Robots_Outro_79454629.mp3" />
+		<None Remove="audio\music\PPK_-_Resurrection_48325497.mp3" />
+		<None Remove="audio\music\PPK_-_Voskreshenie_Space_Club_Mix_80056433.mp3" />
+		<None Remove="audio\music\Rammstein_-_Adios_57658989.mp3" />
+		<None Remove="audio\music\Rammstein_-_Asche_zu_Asche_57658971.mp3" />
+		<None Remove="audio\music\Rammstein_-_Engel_63121915.mp3" />
+		<None Remove="audio\music\Rammstein_-_Ich_will_57658983.mp3" />
+		<None Remove="audio\music\Rammstein_-_Mein_Herz_brennt_57658979.mp3" />
+		<None Remove="audio\music\Rammstein_-_Ohne_Dich_63121956.mp3" />
+		<None Remove="audio\sfx\crystal.mp3" />
+		<None Remove="audio\sfx\crystal1.mp3" />
+		<None Remove="audio\sfx\engine.mp3" />
+		<None Remove="audio\sfx\explosion.mp3" />
+		<None Remove="audio\sfx\gameover.mp3" />
+		<None Remove="audio\sfx\victory.mp3" />
 		<None Remove="image\Logo.jpg" />
 		<None Remove="image\Logo.png" />
 		<None Remove="image\Shatl.jpg" />
@@ -35,6 +50,54 @@
 	  <Resource Include="image\Logo.png" />
 	  <Resource Include="image\Shatl.jpg" />
 	  <Resource Include="image\space-shuttle.jpg" />
+	  <Content Include="audio\music\PPK_-_Perezagruzka_Robots_Outro_79454629.mp3">
+	    <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+	  </Content>
+	  <Content Include="audio\music\PPK_-_Resurrection_48325497.mp3">
+	    <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+	  </Content>
+	  <Content Include="audio\music\PPK_-_Voskreshenie_Space_Club_Mix_80056433.mp3">
+	    <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+	  </Content>
+	  <Content Include="audio\music\Rammstein_-_Adios_57658989.mp3">
+	    <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+	  </Content>
+	  <Content Include="audio\music\Rammstein_-_Asche_zu_Asche_57658971.mp3">
+	    <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+	  </Content>
+	  <Content Include="audio\music\Rammstein_-_Engel_63121915.mp3">
+	    <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+	  </Content>
+	  <Content Include="audio\music\Rammstein_-_Ich_will_57658983.mp3">
+	    <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+	  </Content>
+	  <Content Include="audio\music\Rammstein_-_Mein_Herz_brennt_57658979.mp3">
+	    <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+	  </Content>
+	  <Content Include="audio\music\Rammstein_-_Ohne_Dich_63121956.mp3">
+	    <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+	  </Content>
+	  <Content Include="audio\sfx\crystal.mp3">
+	    <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+	  </Content>
+	  <Content Include="audio\sfx\crystal1.mp3">
+	    <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+	  </Content>
+	  <Content Include="audio\sfx\engine.mp3">
+	    <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+	  </Content>
+	  <Content Include="audio\sfx\explosion.mp3">
+	    <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+	  </Content>
+	  <Content Include="audio\sfx\gameover.mp3">
+	    <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+	  </Content>
+	  <Content Include="audio\sfx\superCrystal.mp3">
+	    <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+	  </Content>
+	  <Content Include="audio\sfx\victory.mp3">
+	    <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+	  </Content>
 	  <Content Include="models\Cockpit.stp">
 	    <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
 	  </Content>

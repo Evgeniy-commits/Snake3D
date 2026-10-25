@@ -64,42 +64,75 @@
                 Style="{StaticResource MenuButton}" Click="BtnOptions_Click"/>
 
 		<!-- Popup привязан к кнопке: закрывается по клику мимо (StaysOpen=False) -->
+		<!-- Popup привязан к кнопке: закрывается по клику мимо (StaysOpen=False) -->
 		<Popup x:Name="OptionsPopup"
                PlacementTarget="{Binding ElementName=BtnOptions}"
                Placement="Bottom" StaysOpen="False" AllowsTransparency="True">
 			<Border Background="#E6181C30" BorderBrush="#5A6B9E" BorderThickness="1"
 						CornerRadius="8" Padding="18" Width="360">
 				<StackPanel TextElement.Foreground="#9AA6C8">
-					<CheckBox x:Name="OptCockpit" Content="Вид: кабина (иначе — обзор)" Foreground="#9AA6C8"/>
+
+					<!-- ─── Звук ─── -->
+					<TextBlock Text="Звук" Margin="0,0,0,2" Foreground="#9AA6C8"/>
+					<CheckBox x:Name="OptMusic" Content="Музыка" IsChecked="True"
+						Foreground="#9AA6C8" Checked="OptAudio_Changed" Unchecked="OptAudio_Changed"/>
+					<CheckBox x:Name="OptSfx" Content="Эффекты" IsChecked="True"
+						Foreground="#9AA6C8" Margin="0,6,0,0"
+						Checked="OptAudio_Changed" Unchecked="OptAudio_Changed"/>
+					<StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+						<TextBlock Text="Музыка: " VerticalAlignment="Center" Foreground="#9AA6C8" Width="80"/>
+						<Slider x:Name="OptMusicVol" Width="200" Minimum="0" Maximum="100" Value="60"
+							IsMoveToPointEnabled="True" ValueChanged="OptMusicVol_ValueChanged"/>
+						<TextBlock x:Name="MusicVolLabel" Text="60" Width="34" Margin="8,0,0,0"
+							VerticalAlignment="Center" Foreground="#7E8AB0"/>
+					</StackPanel>
+					<StackPanel Orientation="Horizontal" Margin="0,6,0,0">
+						<TextBlock Text="Эффекты: " VerticalAlignment="Center" Foreground="#9AA6C8" Width="80"/>
+						<Slider x:Name="OptSfxVol" Width="200" Minimum="0" Maximum="100" Value="80"
+							IsMoveToPointEnabled="True" ValueChanged="OptSfxVol_ValueChanged"/>
+						<TextBlock x:Name="SfxVolLabel" Text="80" Width="34" Margin="8,0,0,0"
+							VerticalAlignment="Center" Foreground="#7E8AB0"/>
+					</StackPanel>
+
+					<!-- ─── Управление и вид ─── -->
+					<TextBlock Margin="0,14,0,0" Foreground="#9AA6C8">
+						<CheckBox x:Name="OptCockpit" Content="Вид: кабина (иначе — обзор)" Foreground="#9AA6C8"/>
+					</TextBlock>
 					<CheckBox x:Name="OptTap" Content="Управление: тап-поворот (иначе — плавное)"
-						 Foreground="#9AA6C8" Margin="0,6,0,0"/>
+						Foreground="#9AA6C8" Margin="0,6,0,0"/>
 					<CheckBox x:Name="OptWalls" Content="Стены включены" IsChecked="True"
 						Foreground="#9AA6C8" Margin="0,6,0,0"/>
 
+					<!-- ─── Скорость ─── -->
 					<TextBlock Text="Скорость игры" Margin="0,14,0,2" Foreground="#9AA6C8"/>
 					<Slider x:Name="OptSpeed" Minimum="0.5" Maximum="15.0" Value="1.0"
 						TickFrequency="0.25" IsSnapToTickEnabled="True"/>
 					<TextBlock x:Name="SpeedLabel" FontSize="12" Foreground="#7E8AB0" Margin="0,2,0,0"/>
-					
+
+					<!-- ─── Кристаллы ─── -->
 					<TextBlock Text="Кристаллов на поле" Margin="0,14,0,2" Foreground="#9AA6C8"/>
 					<Slider x:Name="OptCrystals" Minimum="1" Maximum="1000" Value="200"
 						TickFrequency="1" IsSnapToTickEnabled="True"/>
 					<TextBlock x:Name="CrystalLabel" FontSize="12" Foreground="#7E8AB0" Margin="0,2,0,0"/>
 
+					<!-- ─── Мины ─── -->
 					<TextBlock Text="Мин на поле" Margin="0,14,0,2" Foreground="#9AA6C8"/>
 					<Slider x:Name="OptMines" Minimum="0" Maximum="500" Value="100"
 						TickFrequency="1" IsSnapToTickEnabled="True"/>
 					<TextBlock x:Name="MineLabel" FontSize="12" Foreground="#7E8AB0" Margin="0,2,0,0"/>
 
+					<!-- ─── Арена ─── -->
 					<TextBlock Text="Размер арены" Margin="0,14,0,2" Foreground="#9AA6C8"/>
 					<Slider x:Name="OptArena" Minimum="60" Maximum="1000" Value="120"
-                TickFrequency="10" IsSnapToTickEnabled="True"/>
+						TickFrequency="10" IsSnapToTickEnabled="True"/>
 					<TextBlock x:Name="ArenaLabel" FontSize="12" Foreground="#7E8AB0" Margin="0,2,0,0"/>
 
+					<!-- ─── Сетка ─── -->
 					<TextBlock Text="Шаг сетки" Margin="0,14,0,2" Foreground="#9AA6C8"/>
 					<Slider x:Name="OptGrid" Minimum="1.0" Maximum="10" Value="2.5"
-                TickFrequency="0.5" IsSnapToTickEnabled="True"/>
+						TickFrequency="0.5" IsSnapToTickEnabled="True"/>
 					<TextBlock x:Name="GridLabel" FontSize="12" Foreground="#7E8AB0" Margin="0,2,0,0"/>
+
 				</StackPanel>
 			</Border>
 		</Popup>

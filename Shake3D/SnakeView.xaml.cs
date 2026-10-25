@@ -138,6 +138,10 @@ namespace Snake3D
                 _game = new SnakeGame(_viewport.Proxy!, opt.ArenaSize, opt.GridStep,
                                       GameConfig.SegmentRadius, GameConfig.FoodRadius);
 
+                _game.CrystalEaten += () => Audio.Service.PlaySfx("crystal1");
+                _game.MineHit += () => Audio.Service.PlaySfx("explosion");
+                _game.SuperSpawned += () => Audio.Service.PlaySfx("superCrystal");
+
                 // 3. События логики приходят из кадрового цикла — в UI-поток через Dispatcher
                 _game.ScoreChanged += (s, score) =>
                     Dispatcher.Invoke(() =>
@@ -153,6 +157,9 @@ namespace Snake3D
                     {
                         _finished = true;                 // чтобы Space сделал рестарт, а не Start()
                         SaveRun();                        // рекорд пишется при любом исходе
+                        Audio.Service.StopFlight();
+                        Audio.Service.StopMusic();          // Stop, не Pause — чтобы следующий старт дал новую музыку
+                        Audio.Service.PlaySfx("gameover");
                         StatusText.Text = "Игра окончена! SPACE — рестарт";
                     });
 
@@ -160,6 +167,9 @@ namespace Snake3D
                 {
                     _finished = true;
                     SaveRun();
+                    Audio.Service.StopFlight();
+                    Audio.Service.StopMusic();
+                    Audio.Service.PlaySfx("victory");
                     var t = TimeSpan.FromSeconds(_game!.PlayTime);
                     StatusText.Text = $"Миссия выполнена! Очки: {_game.Score}  Время: {t.Minutes:00}:{t.Seconds:00}  SPACE — заново";
 
@@ -245,7 +255,7 @@ namespace Snake3D
                         _game.Reset();
                         _viewport?.Proxy?.FitScene();                        
                         _game.Start();
-                        //_viewport?.Proxy!.FollowHead(0);
+                        Audio.Service.StartFlight();
                         StatusText.Text = "Идёт игра!";
                     }
                     else if (_game.IsRunning)
@@ -256,7 +266,7 @@ namespace Snake3D
                     else if (!_game.IsRunning)
                     {
                         _game.Start();
-                        //_viewport?.Proxy!.FollowHead(0);
+                        Audio.Service.StartFlight();
                         StatusText.Text = "Идёт игра!";
                     }
                     break;
