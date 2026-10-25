@@ -117,7 +117,10 @@
 	    <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
 	  </Content>
 	</ItemGroup>
-
+	<ItemGroup>
+		<None Include="native\**\*.dll" CopyToOutputDirectory="PreserveNewest"
+			Link="%(Filename)%(Extension)" />
+	</ItemGroup>
 </Project>
 
 
