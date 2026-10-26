@@ -540,12 +540,9 @@ namespace Snake3D
             {
                 if (Distance(newHead, _crystals[i]) <= _segmentRadius + _foodRadius + tolerance)
                 {
-                    Score += 10;
-                    ScoreChanged?.Invoke(this, Score);
-                    ateFood = true;
-
                     _proxy.RemoveCrystalAt(i);
                     _crystals.RemoveAt(i);
+                    ateFood = true;
 
                     if (_mode == GameMode.FreeHunt)
                     {
@@ -563,6 +560,8 @@ namespace Snake3D
                             TrySpawnSuperCrystals();
                     }
 
+                    Score += 10;
+                    ScoreChanged?.Invoke(this, Score);
                     CrystalEaten?.Invoke();
 
                     if (_mode == GameMode.Mission && _crystals.Count == 0 && _superCrystals.Count == 0)

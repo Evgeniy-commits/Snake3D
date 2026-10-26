@@ -219,7 +219,7 @@ namespace Snake3D
         {
             if (_runSaved || _game == null) return;
             _runSaved = true;
-            HighScoreStore.Add
+            HighScoresWindow.Add
             (
                 new HighScoreEntry
                 {
@@ -252,10 +252,13 @@ namespace Snake3D
                     else if (_game.IsGameOver || _finished)
                     {
                         _finished = false;
+                        _runSaved = false;
                         _game.Reset();
-                        _viewport?.Proxy?.FitScene();                        
-                        _game.Start();
+                        _viewport?.Proxy?.FitScene();
+                        _viewport?.Proxy?.SetBackgroundColor(2, 2, 5);
+                        _viewport?.Proxy!.FollowHead(0, snap: true);
                         Audio.Service.StartFlight();
+                        Audio.Service.StartMusic();
                         StatusText.Text = "Идёт игра!";
                     }
                     else if (_game.IsRunning)
