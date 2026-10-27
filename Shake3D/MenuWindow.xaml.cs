@@ -49,6 +49,8 @@ namespace Snake3D
                 MineLabel.Text = OptMines.Value < 1
                     ? "без мин"
                     : $"{OptMines.Value:0} мин на поле";
+
+            BtnContinue.Visibility = pauseMode ? Visibility.Visible : Visibility.Collapsed;
         }
 
         private void BtnOptions_Click(object sender, RoutedEventArgs e)

@@ -59,5 +59,17 @@ namespace Snake3D
             public static readonly string[] Material = { "STEEL", "SHINY_PLASTIC", "SHINY_PLASTIC" };
 
         }
+
+        public static class Shield
+        {
+            public const int    ModelId = 9;                    // id модели щита в _models прокси
+            public const string Path = @"models\Shield.stp";
+            public const double Size = 2.0;                     // габарит модели щита в единицах арены
+            public const double FallbackRadius = 1.2;           // радиус для fallback-сферы и ореола
+            public const int    TriggerCount = 20;              // съеденных кристаллов до появления щита
+            public const double LifeTime = 60.0;                // сколько щит ждёт на арене, сек
+            public const double ProtectionTime = 30.0;          // защита от мин после подбора, сек
+            public const double ShipHaloRadius = 2.2;           // радиус ореола вокруг корабля
+        }
     }
 }

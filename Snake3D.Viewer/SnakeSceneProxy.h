@@ -121,10 +121,10 @@ namespace Snake3DViewer
 
 		// Корабль: части, их подгоночные трансформации, индекс двигателя
 		NCollection_DataMap<int, Handle(AIS_Shape)>* _shipParts;
-		NCollection_DataMap<int, gp_Trsf>*            _fitTrsf;
+		NCollection_DataMap<int, gp_Trsf>* _fitTrsf;
 		NCollection_Haft<Handle(AIS_Shape)> _enginePart;
 		double _engineGlowR = 0.30, _engineGlowG = 0.55, _engineGlowB = 1.0;
-		
+
 		// Нативные указатели на векторы 
 		std::vector<Handle(AIS_Shape)>* _snakeSegments;
 		std::vector<Handle(AIS_Shape)>* _walls;
@@ -133,6 +133,8 @@ namespace Snake3DViewer
 		std::vector<gp_Pnt>* _positions;
 		std::vector<Handle(AIS_Shape)>* _crystals;
 		std::vector<gp_Pnt>* _crystalBase;
+		// Малые ореолы обычных кристаллов: индекс совпадает с индексом кристалла.
+		std::vector<Handle(AIS_Shape)>* _crystalHalos;
 		std::vector<Handle(AIS_Shape)>* _superCrystals;
 		std::vector<gp_Pnt>* _superBase;
 		std::vector<Handle(AIS_Shape)>* _superSpheres;
@@ -140,6 +142,17 @@ namespace Snake3DViewer
 		std::vector<gp_Pnt>* _mineBase;
 		std::vector<TopoDS_Shape*>* _models;            // 0=голова, 1=хвост, 2=кристалл, 4=мина
 		std::vector<gp_Vec>* _segmentDirs;
+
+		// ── Щит: одна штука на арене, модель (id 9) либо fallback-сфера.
+		// Оболочка — клетка из трёх кругов, как у супер-кристалла, но в своём цвете.
+		std::vector<Handle(AIS_Shape)>* _shields;
+		std::vector<gp_Pnt>* _shieldBase;
+		std::vector<Handle(AIS_Shape)>* _shieldShells;
+
+		// Ореол корабля при активной защите: каркас из кругов, ставится кадром PlaceShip.
+		NCollection_Haft<Handle(AIS_Shape)> _shipShield;
+		bool _shipShieldOn = false;
+
 		double _dirX, _dirY, _dirZ;
 		double _upX, _upY, _upZ;
 
@@ -245,6 +258,12 @@ namespace Snake3DViewer
 			_models = new std::vector<TopoDS_Shape*>();
 			_segmentDirs = new std::vector<gp_Vec>();
 
+			_shields = new std::vector<Handle(AIS_Shape)>();
+			_shieldBase = new std::vector<gp_Pnt>();
+			_shieldShells = new std::vector<Handle(AIS_Shape)>();
+			_crystalHalos = new std::vector<Handle(AIS_Shape)>();
+			_shipShield() = NULL;
+
 			_dirX = 0.0;  _dirY = 1.0;  _dirZ = 0.0;
 			_upX = 0.0;   _upY = 0.0;   _upZ = 1.0;
 
@@ -287,6 +306,11 @@ namespace Snake3DViewer
 			delete _superCrystals; _superCrystals = nullptr;
 			delete _superSpheres; _superSpheres = nullptr;
 
+			delete _shields;        _shields = nullptr;
+			delete _shieldBase;     _shieldBase = nullptr;
+			delete _shieldShells;   _shieldShells = nullptr;
+			delete _crystalHalos;   _crystalHalos = nullptr;
+
 			for (auto* m : *_models) delete m;
 			delete _models;        _models = nullptr;
 			delete _crystalBase;   _crystalBase = nullptr;
@@ -314,6 +338,11 @@ namespace Snake3DViewer
 			delete _superCrystals; _superCrystals = nullptr;
 			delete _superSpheres; _superSpheres = nullptr;
 
+			delete _shields;        _shields = nullptr;
+			delete _shieldBase;     _shieldBase = nullptr;
+			delete _shieldShells;   _shieldShells = nullptr;
+			delete _crystalHalos;   _crystalHalos = nullptr;
+
 			for (auto* m : *_models) delete m;
 			delete _models;        _models = nullptr;
 			delete _crystalBase;   _crystalBase = nullptr;
@@ -338,7 +367,7 @@ namespace Snake3DViewer
 		//арены.
 		bool LoadStepModel(System::String^ path, int kind, double targetSize)
 		{
-			if (kind < 0 || kind > 8) return false;
+			if (kind < 0 || kind > 9) return false;
 
 			msclr::interop::marshal_context ctx;
 			std::string nativePath = ctx.marshal_as<std::string>(path);
@@ -611,6 +640,13 @@ namespace Snake3DViewer
 			ClearCrystals();
 			ClearMines();
 			ClearSuperCrystals();
+			RemoveShield();
+
+			SetShipShield(false, 0.0);
+			for (auto& h : *_crystalHalos)
+				if (!h.IsNull() && !_aisContext().IsNull())
+					_aisContext()->Erase(h, Standard_False);
+			_crystalHalos->clear();
 
 			for (NCollection_DataMap<int, Handle(AIS_Shape)>::Iterator it(*_shipParts);
 				it.More(); it.Next())
@@ -811,9 +847,16 @@ namespace Snake3DViewer
 				right.Y(), fwd.Y(), up.Y(), newPos.Y() - (*_basePositions)[headIndex].Y(),
 				right.Z(), fwd.Z(), up.Z(), newPos.Z() - (*_basePositions)[headIndex].Z());
 
-			(*_snakeSegments)[headIndex]->SetLocalTransformation(trsf);
-			//_aisContext()->Redisplay((*_snakeSegments)[headIndex], Standard_False);
-		}		
+
+			if (_shipShieldOn && !_shipShield().IsNull())
+			{
+				gp_Trsf spin;
+				spin.SetRotation(gp_Ax1(gp_Pnt(0, 0, 0), gp_Dir(0, 0, 1)), _spinAngle);
+				_shipShield()->SetLocalTransformation(trsf.Multiplied(spin));
+			}
+
+			(*_snakeSegments)[headIndex]->SetLocalTransformation(trsf);			
+		}
 
 		void CreateWalls(double arenaSize)
 		{
@@ -913,6 +956,11 @@ namespace Snake3DViewer
 			for (auto& c : *_crystals)
 				if (!c.IsNull() && !_aisContext().IsNull())
 					_aisContext()->Erase(c, Standard_False);
+			//ореол
+			for (auto& h : *_crystalHalos)
+				if (!h.IsNull() && !_aisContext().IsNull())
+					_aisContext()->Erase(h, Standard_False);
+			_crystalHalos->clear();
 			_crystals->clear();
 		}
 
@@ -941,14 +989,44 @@ namespace Snake3DViewer
 			(*_crystals)[index] = aisShape;
 			(*_crystalBase)[index] = center;
 
-			if (model != nullptr)
-			{
-				gp_Trsf trans;
-				trans.SetTranslation(gp_Vec(gp_Pnt(0, 0, 0), center));
-				aisShape->SetLocalTransformation(trans);
-			}
+			// Малый ореол вокруг кристалла: обозначает «съедобность».
+			// Два круга, радиус чуть меньше высоты кристалла.
+			// позицию и ориентацию каждый кадр задаёт UpdateCrystalOrientations.
 
-			_aisContext()->Display(aisShape, Standard_True);
+			const double haloR = radius * 1.25;
+			TopoDS_Compound halo;
+			BRep_Builder hb;
+			hb.MakeCompound(halo);
+
+			// Оси наклонены на 45° от вертикали: при вращении вокруг up меняется
+			// азимут кругов — вертикальный круг вращение «не видит» (симметрия).
+			const double s45 = 0.7;
+			static const double hAxes[2][3] = 
+			{
+				{ 0.0, s45, s45 },      // наклон в плоскости YZ
+				{ s45, 0.0, s45 }       // наклон в плоскости XZ
+			};
+			//static const double hAxes[2][3] = { {0, 0, 1}, {0, 1, 0} };
+			for (int k = 0; k < 2; ++k)
+			{
+				gp_Ax2 ax(gp_Pnt(0, 0, 0), gp_Dir(hAxes[k][0], hAxes[k][1], hAxes[k][2]));
+				hb.Add(halo, BRepBuilderAPI_MakeEdge(gp_Circ(ax, haloR)).Edge());
+			}
+			Handle(AIS_Shape) haloShape = new AIS_Shape(halo);
+			haloShape->SetDisplayMode(0);
+			haloShape->SetColor(Quantity_Color(1.00, 0.72, 0.20, Quantity_TOC_RGB)); // янтарный
+			if (index >= (int)_crystalHalos->size()) _crystalHalos->resize(index + 1);
+			(*_crystalHalos)[index] = haloShape;
+			
+			// Стартовая позиция обоих объектов — до первого кадра не висят в нуле
+			gp_Trsf trans;
+			trans.SetTranslation(gp_Vec(gp_Pnt(0, 0, 0), center));
+			if (model != nullptr) aisShape->SetLocalTransformation(trans);
+			haloShape->SetLocalTransformation(trans);
+
+			// Оба дисплея отложенные; перерисовка — один раз на весь спавн
+			_aisContext()->Display(haloShape, Standard_False);
+			_aisContext()->Display(aisShape, Standard_False);			
 		}
 
 		void AddSuperCrystalAt(double x, double y, double z, double radius)
@@ -995,24 +1073,29 @@ namespace Snake3DViewer
 			const double shellR = radius * 4.0;
 			const double cageR = shellR * 0.9;   // клетка чуть меньше сферы
 
+			const double s45 = 0.7;
+			static const double axes[3][3] = {
+				{ 0.0,  s45, s45 },
+				{ s45,  0.0, s45 },
+				{ 0.0, -s45, s45 }
+			};
+
 			TopoDS_Compound shell;
 			BRep_Builder bb;
 			bb.MakeCompound(shell);
-			bb.Add(shell, BRepPrimAPI_MakeSphere(shellR).Shape());
+			bb.Add(shell, BRepPrimAPI_MakeSphere(shellR).Shape());   // сфера ОДНА
 
 			for (int k = 0; k < 3; ++k)
 			{
-				static const double axes[3][3] = { {0, 0, 1}, {0, 1, 0}, {1, 0, 0} };
 				gp_Ax2 ax(gp_Pnt(0, 0, 0), gp_Dir(axes[k][0], axes[k][1], axes[k][2]));
-				gp_Circ circ(ax, cageR);
-				bb.Add(shell, BRepBuilderAPI_MakeEdge(circ).Edge());
+				bb.Add(shell, BRepBuilderAPI_MakeEdge(gp_Circ(ax, cageR)).Edge());
 			}
 
 			Handle(AIS_Shape) sphereShape = new AIS_Shape(shell);
+			sphereShape->SetDisplayMode(1);
 			sphereShape->SetColor(Quantity_Color(0.55, 0.15, 0.95, Quantity_TOC_RGB));
-			sphereShape->SetTransparency(0.55); // было 0.85 — оболочка плотнее
-			_aisContext()->Display(sphereShape, Standard_False);
-
+			sphereShape->SetTransparency(0.70);   // прозрачнее прежних 0.55
+			
 			// Стартовая позиция: до первого кадра вращения оболочка не должна
 			// висеть в начале координат арены
 			gp_Trsf init;
@@ -1020,6 +1103,121 @@ namespace Snake3DViewer
 			sphereShape->SetLocalTransformation(init);
 
 			_superSpheres->push_back(sphereShape);
+
+			_aisContext()->Display(sphereShape, Standard_False);
+		}
+
+		//Щит
+		void AddShieldAt(double x, double y, double z, double size)
+		{
+			gp_Pnt center(x, y, z);
+			Handle(AIS_Shape) aisShape;
+			TopoDS_Shape* model = GetModel(9);
+
+			if (model != nullptr)
+			{
+				aisShape = new AIS_Shape(*model);
+				aisShape->SetColor(Quantity_Color(0.10, 0.85, 0.70, Quantity_TOC_RGB)); // бирюзовый
+				aisShape->SetTransparency(0.30);
+			}
+			else
+			{
+				// Модель щита ещё не нарисована/не загрузилась — fallback-сфера
+				BRepPrimAPI_MakeSphere big(center, size * 0.6);
+				aisShape = new AIS_Shape(big.Shape());
+				aisShape->SetColor(Quantity_Color(0.10, 0.85, 0.70, Quantity_TOC_RGB));
+			}
+			aisShape->SetDisplayMode(1);
+
+			_shields->push_back(aisShape);
+			_shieldBase->push_back(center);
+
+			if (model != nullptr)
+			{
+				gp_Trsf trans;
+				trans.SetTranslation(gp_Vec(gp_Pnt(0, 0, 0), center));
+				aisShape->SetLocalTransformation(trans);
+			}
+
+			// Оболочка щита: кокон — сфера + клетка из трёх наклонных кругов,
+			// бирюза как у ореола корабля. Ось (0,0,1) наклонена на 45°,
+			// иначе вращение вокруг up на ней не видно.
+			const double shellR = size * 1.5;
+			const double cageR = shellR * 0.9;
+
+			const double s45 = 0.7;
+			static const double axes[3][3] = {
+				{ 0.0,  s45, s45 },
+				{ s45,  0.0, s45 },
+				{ 0.0, -s45, s45 }
+			};
+
+			TopoDS_Compound shell;
+			BRep_Builder bb;
+			bb.MakeCompound(shell);
+			bb.Add(shell, BRepPrimAPI_MakeSphere(shellR).Shape());
+
+			for (int k = 0; k < 3; ++k)
+			{
+				gp_Ax2 ax(gp_Pnt(0, 0, 0), gp_Dir(axes[k][0], axes[k][1], axes[k][2]));
+				bb.Add(shell, BRepBuilderAPI_MakeEdge(gp_Circ(ax, cageR)).Edge());
+			}
+
+			Handle(AIS_Shape) shellShape = new AIS_Shape(shell);
+			shellShape->SetDisplayMode(1);
+			shellShape->SetColor(Quantity_Color(0.10, 0.85, 0.70, Quantity_TOC_RGB)); // бирюза
+			shellShape->SetTransparency(0.70);
+
+			gp_Trsf init;
+			init.SetTranslation(gp_Vec(gp_Pnt(0, 0, 0), center));
+			shellShape->SetLocalTransformation(init);
+			_aisContext()->Display(shellShape, Standard_False);
+			_shieldShells->push_back(shellShape);
+			_aisContext()->Display(aisShape, Standard_True);
+		}
+
+		// Ореол защиты вокруг корабля: кокон — полупрозрачная сфера и клетка
+		// из трёх наклонных на 45° кругов. Вращение вокруг локальной вертикали
+		// задаёт PlaceShip (кадр × спин), поэтому клетка проворачивается синхронно
+		// с кристаллами на арене.
+		void SetShipShield(bool on, double radius)
+		{
+			if (on == _shipShieldOn) return;
+			_shipShieldOn = on;
+
+			if (!_shipShield().IsNull() && !_aisContext().IsNull())
+				_aisContext()->Erase(_shipShield(), Standard_False);
+			_shipShield() = nullptr;
+
+			if (!on) return;
+
+			const double s45 = 0.7;
+			static const double axes[3][3] = {
+				{ 0.0,  s45, s45 },
+				{ s45,  0.0, s45 },
+				{ 0.0, -s45, s45 }
+			};
+
+			TopoDS_Compound shell;
+			BRep_Builder bb;
+			bb.MakeCompound(shell);
+
+			// Сфера-кокон: та же модель «оболочки», что у супер-кристалла,
+			// но плотнее — прозрачность 0.55 даёт ощущение энергетического поля
+			bb.Add(shell, BRepPrimAPI_MakeSphere(radius).Shape());
+
+			for (int k = 0; k < 3; ++k)
+			{
+				gp_Ax2 ax(gp_Pnt(0, 0, 0), gp_Dir(axes[k][0], axes[k][1], axes[k][2]));
+				bb.Add(shell, BRepBuilderAPI_MakeEdge(gp_Circ(ax, radius * 0.98)).Edge());
+			}
+
+			Handle(AIS_Shape) s = new AIS_Shape(shell);
+			s->SetDisplayMode(1);
+			s->SetColor(Quantity_Color(0.10, 0.85, 0.70, Quantity_TOC_RGB)); // бирюза
+			s->SetTransparency(0.75);   // было бы 0.85 — еле видно; 0.55 = «кокон»
+			_shipShield() = s;
+			_aisContext()->Display(s, Standard_False);
 		}
 
 		void ClearSuperCrystals()
@@ -1093,7 +1291,9 @@ namespace Snake3DViewer
 					rightR.Z(), fwdR.Z(), up.Z(), pos.Z());
 
 				(*_crystals)[i]->SetLocalTransformation(trsf);
-				//_aisContext()->Redisplay((*_crystals)[i], Standard_False);
+				// Ореол: та же матрица, что у кристалла — вращается синхронно
+				if (i < _crystalHalos->size() && !(*_crystalHalos)[i].IsNull())
+					(*_crystalHalos)[i]->SetLocalTransformation(trsf);
 			}
 
 			for (size_t i = 0; i < _superCrystals->size(); ++i)
@@ -1131,6 +1331,24 @@ namespace Snake3DViewer
 
 				(*_superSpheres)[i]->SetLocalTransformation(trsf);
 			}
+
+			// Щит: та же матрица, что и у кристаллов — ориентируется вместе с кораблём
+			for (size_t i = 0; i < _shields->size(); ++i)
+			{
+				if ((*_shields)[i].IsNull()) continue;
+				gp_Pnt pos = (*_shieldBase)[i];
+				if (!InView(pos.X(), pos.Y(), pos.Z(), 200.0)) continue;
+
+				gp_Trsf trsf;
+				trsf.SetValues(
+					rightR.X(), fwdR.X(), up.X(), pos.X(),
+					rightR.Y(), fwdR.Y(), up.Y(), pos.Y(),
+					rightR.Z(), fwdR.Z(), up.Z(), pos.Z());
+				(*_shields)[i]->SetLocalTransformation(trsf);
+
+				if (i < _shieldShells->size() && !(*_shieldShells)[i].IsNull())
+					(*_shieldShells)[i]->SetLocalTransformation(trsf);
+			}
 		}
 
 		void UpdateSpin(double dt)
@@ -1148,6 +1366,12 @@ namespace Snake3DViewer
 			_crystals->erase(_crystals->begin() + index);
 			if (index < (int)_crystalBase->size())
 				_crystalBase->erase(_crystalBase->begin() + index);
+
+			//ореол
+			if (index < (int)_crystalHalos->size() && !(*_crystalHalos)[index].IsNull() && !_aisContext().IsNull())
+				_aisContext()->Erase((*_crystalHalos)[index], Standard_False);
+			if (index < (int)_crystalHalos->size())
+				_crystalHalos->erase(_crystalHalos->begin() + index);
 		}
 
 		void RemoveSuperCrystalAt(int index)
@@ -1175,6 +1399,21 @@ namespace Snake3DViewer
 			_mines->erase(_mines->begin() + index);
 			if (index < (int)_mineBase->size())
 				_mineBase->erase(_mineBase->begin() + index);
+		}
+
+		// Щит снят с арены: пропало время или подобран игроком
+		void RemoveShield()
+		{
+			if (!_aisContext().IsNull())
+			{
+				for (auto& s : *_shields)
+					if (!s.IsNull()) _aisContext()->Erase(s, Standard_False);
+				for (auto& s : *_shieldShells)
+					if (!s.IsNull()) _aisContext()->Erase(s, Standard_False);
+			}
+			_shields->clear();
+			_shieldBase->clear();
+			_shieldShells->clear();
 		}
 
 		//Мины
@@ -1619,7 +1858,7 @@ namespace Snake3DViewer
 				camUp = 3.0;
 				lookAhead = 10.0;
 				fov = 45.0;
-				lerpSpeed = 0.05;				
+				lerpSpeed = 0.05;
 			}
 			if (snap) lerpSpeed = 1.0;
 			// Геометрия камеры жёсткая: глаз на фиксированном отлёте и высоте,
@@ -1702,9 +1941,9 @@ namespace Snake3DViewer
 		// Разместить корабль целиком: общий кадр головы × подгоночная трансформация части.
 		// Двигатель мерцает синусоидой — как подсветка стен, но по цвету модели.
 		void PlaceShip(double x, double y, double z,
-			double fx, double fy, double fz,
-			double ux, double uy, double uz,
-			double timeSec)
+					   double fx, double fy, double fz,
+					   double ux, double uy, double uz,
+					   double timeSec)
 		{
 			gp_Trsf head = TrsfFromFrame(x, y, z, fx, fy, fz, ux, uy, uz);
 
@@ -1713,8 +1952,7 @@ namespace Snake3DViewer
 			{
 				if (!_fitTrsf->IsBound(it.Key())) continue;
 
-				it.Value()->SetLocalTransformation(head.Multiplied((*_fitTrsf)(it.Key())));
-				//_aisContext()->Redisplay(it.Value(), Standard_False);
+				it.Value()->SetLocalTransformation(head.Multiplied((*_fitTrsf)(it.Key())));				
 			}
 
 			// Корабль = голова: держим слот 0 в курсе для камеры (FollowHead)
@@ -1737,7 +1975,16 @@ namespace Snake3DViewer
 				_enginePart()->SetTransparency(0.2 + 0.3 * k);
 			}
 
-			//_aisContext()->UpdateCurrentViewer();
+			//ореол садится на общий кадр корабля
+			if (_shipShieldOn && !_shipShield().IsNull())
+			{
+				// Вращение кокона вокруг локальной вертикали корабля: ось (0,0,1)
+				// в локальных координатах (X=right, Y=fwd, Z=up). Угол общий
+				// с кристаллами — весь «живой» слой арены крутится в ногу.
+				gp_Trsf spin;
+				spin.SetRotation(gp_Ax1(gp_Pnt(0, 0, 0), gp_Dir(0, 0, 1)), _spinAngle);
+				_shipShield()->SetLocalTransformation(head.Multiplied(spin));
+			}
 		}
 
 		// Создать часть корабля из уже загруженной модели и поставить на сцену.
@@ -1762,11 +2009,11 @@ namespace Snake3DViewer
 		{
 			//if (!_shipParts -> IsBound(id)) return false;
 			const double d2r = M_PI / 180.0;
-			
+
 			gp_Trsf t;
 			if (rollDeg != 0.0)	t.SetRotation(gp_Ax1(gp_Pnt(0, 0, 0), gp_Dir(0, 0, 1)), rollDeg * d2r);
-			if (pitchDeg != 0.0){ gp_Trsf r; r.SetRotation(gp_Ax1(gp_Pnt(0, 0, 0), gp_Dir(1, 0, 0)), pitchDeg * d2r); t.PreMultiply(r); }
-			if (yawDeg != 0.0)	{ gp_Trsf r; r.SetRotation(gp_Ax1(gp_Pnt(0, 0, 0), gp_Dir(0, 1, 0)), yawDeg * d2r); t.PreMultiply(r); }
+			if (pitchDeg != 0.0) { gp_Trsf r; r.SetRotation(gp_Ax1(gp_Pnt(0, 0, 0), gp_Dir(1, 0, 0)), pitchDeg * d2r); t.PreMultiply(r); }
+			if (yawDeg != 0.0) { gp_Trsf r; r.SetRotation(gp_Ax1(gp_Pnt(0, 0, 0), gp_Dir(0, 1, 0)), yawDeg * d2r); t.PreMultiply(r); }
 
 			t.SetTranslationPart(gp_XYZ(dx, dy, dz));
 
@@ -1775,7 +2022,7 @@ namespace Snake3DViewer
 			// к объекту только если он уже на сцене.
 			if (_fitTrsf->IsBound(id)) (*_fitTrsf)(id) = t;
 			else _fitTrsf->Bind(id, t);
-			
+
 			if (_shipParts->IsBound(id))
 				_shipParts->Find(id)->SetLocalTransformation(t);
 			return true;

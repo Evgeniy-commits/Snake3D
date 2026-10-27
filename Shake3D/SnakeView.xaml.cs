@@ -127,8 +127,16 @@ namespace Snake3D
             {
                 if (!IsLoaded) return;   // окно закрыли раньше, чем открылось меню
 
+                Audio.Service.StartMenuMusic();
+
                 var menu = new MenuWindow { Owner = this };
-                if (menu.ShowDialog() != true) { Close(); return; }   // крестик/«Выход»
+                if (menu.ShowDialog() != true) 
+                {
+                    Audio.Service.StopMenuMusic();
+                    Close(); 
+                    return; 
+                }   // крестик/«Выход»
+                Audio.Service.StopMenuMusic();
                 var opt = menu.Options;
 
                 // 1. Сетка + единственная подгонка камеры (небо — внутри, после FitScene)
@@ -141,6 +149,12 @@ namespace Snake3D
                 _game.CrystalEaten += () => Audio.Service.PlaySfx("crystal1");
                 _game.MineHit += () => Audio.Service.PlaySfx("explosion");
                 _game.SuperSpawned += () => Audio.Service.PlaySfx("superCrystal");
+
+                // Звук щита: четыре события из SnakeGame
+                _game.ShieldSpawned += () => Audio.Service.PlaySfx("shieldSpawn");
+                _game.ShieldTaken += () => Audio.Service.PlaySfx("shieldUp");
+                _game.ShieldExpired += () => Audio.Service.PlaySfx("shieldDown");
+                _game.ShieldWoreOff += () => Audio.Service.PlaySfx("shieldOff");
 
                 // 3. События логики приходят из кадрового цикла — в UI-поток через Dispatcher
                 _game.ScoreChanged += (s, score) =>
@@ -173,18 +187,19 @@ namespace Snake3D
                     var t = TimeSpan.FromSeconds(_game!.PlayTime);
                     StatusText.Text = $"Миссия выполнена! Очки: {_game.Score}  Время: {t.Minutes:00}:{t.Seconds:00}  SPACE — заново";
 
-                    // 4. Фон почти чёрный, с холодным оттенком — звёзды проступают
-                    _viewport.Proxy!.SetBackgroundColor(5, 5, 10);
+                   _viewport.Proxy!.SetBackgroundColor(5, 5, 10);
                 });
 
-                // 5. Опции ДО Reset: сцена строится сразу с учётом выбора (мины, кристаллы, стены)
+                // 4. Опции ДО Reset: сцена строится сразу с учётом выбора.
+                // Источник опций — opt из меню, отдельного _game.Options нет.
                 _game.ApplyOptions(opt);
                 _game.Reset();
-                //_viewport.Proxy!.FitScene();
+
+                // 5. Камера на стартовую позицию корабля. Игра НЕ стартует:
+                // стоит до Space, игрок может открыть Esc-меню и поменять опции.
                 _viewport.Proxy!.SetBackgroundColor(2, 2, 5);
                 _viewport.Proxy!.SetViewMode(opt.CockpitView ? 1 : 0);
-                for (int i = 0; i < 200; i++)        // дотягиваем лерп до конца
-                    _viewport.Proxy!.FollowHead(0);
+                _viewport.Proxy!.FollowHead(0, snap: true);
                 StatusText.Text = "Space - старт";
 
                 // 6. Мышь — на WinForms-события контрола (airspace: WPF-события
@@ -254,12 +269,13 @@ namespace Snake3D
                         _finished = false;
                         _runSaved = false;
                         _game.Reset();
-                        _viewport?.Proxy?.FitScene();
+                        //_game.Start();
+                        //_viewport?.Proxy?.FitScene();
                         _viewport?.Proxy?.SetBackgroundColor(2, 2, 5);
                         _viewport?.Proxy!.FollowHead(0, snap: true);
                         Audio.Service.StartFlight();
                         Audio.Service.StartMusic();
-                        StatusText.Text = "Идёт игра!";
+                        StatusText.Text = "Space - старт";
                     }
                     else if (_game.IsRunning)
                     {
@@ -316,25 +332,37 @@ namespace Snake3D
                         // игра ещё не стартовала — показываем полное меню (можно выбрать режим),
                         // на паузе — меню паузы (кнопка «Продолжить»)
                         bool paused = _game.IsPaused;
+                        bool notStarted = !_game.IsRunning && !_game.IsGameOver && !_finished;
+
+                        if (notStarted)
+                            Audio.Service.StartMenuMusic();   // до старта — снова тема меню
                         var menu = new MenuWindow(pauseMode: paused) { Owner = this };
                         menu.ShowDialog();
 
                         if (menu.DialogResult == true && !paused)
                         {
-                            // выбрали режим прямо из Esc-меню до старта: готовим партию,
-                            // но НЕ запускаем — старт по Space
-                            _finished = false;
-                            _game.ApplyOptions(menu.Options);
-                            _game.Reset();
-                            _viewport?.Proxy?.FitScene();                           
-                            _viewport?.Proxy!.SetViewMode(menu.Options.CockpitView ? 1 : 0);
-                            //_viewport?.Proxy!.FollowHead(0);
-                            StatusText.Text = "Space — старт";
+                            if (menu.Resumed)
+                            {
+                                // «Продолжить» до старта: игра уже построена и настроена,
+                                // ничего не пересоздаём — просто возвращаемся
+                                StatusText.Text = "Space — старт";
+                            }
+                            else
+                            {
+                                // выбрали режим прямо из Esc-меню до старта: готовим партию,
+                                // но НЕ запускаем — старт по Space
+                                _finished = false;
+                                _game.ApplyOptions(menu.Options);
+                                _game.Reset();
+                                _viewport?.Proxy!.SetViewMode(menu.Options.CockpitView ? 1 : 0);
+                                _viewport?.Proxy?.FollowHead(0, snap: true);
+                                StatusText.Text = "Space — старт";
+                            }
                         }
                         else
                         {
-                            // «Продолжить», Esc в меню или крестик — остаёмся на паузе
-                            StatusText.Text = "Пауза — SPACE чтобы продолжить";
+                            // «Продолжить» на паузе, Esc в меню или крестик — остаёмся на паузе
+                            StatusText.Text = paused ? "Пауза — SPACE чтобы продолжить" : "Space — старт";
                         }
                     }
                     break;

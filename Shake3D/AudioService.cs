@@ -22,6 +22,9 @@ namespace Snake3D
 
 
         private readonly MediaPlayer _music;
+        private readonly MediaPlayer _menuMusic;
+        private bool _menuWanted;
+        private string _menuTrack = "";
         private List<string> _playlist = new List<string>();
         private List<int> _order = new List<int>();
         private int _orderPos = -1;
@@ -44,6 +47,8 @@ namespace Snake3D
         private int _sfxCount;
         private DateTime _lastSfxReport = DateTime.UtcNow;
 
+
+
         public AudioService()
         {
             _music = new MediaPlayer();
@@ -51,6 +56,9 @@ namespace Snake3D
 
             _flight = new MediaPlayer();
             _flight.MediaEnded += FlightEnded;
+
+            _menuMusic = new MediaPlayer();
+            _menuMusic.MediaEnded += MenuEnded;
 
             for (int i = 0; i < 8; ++i)
                 _sfxPool.Add(new MediaPlayer());
@@ -64,12 +72,24 @@ namespace Snake3D
         {
             string musicDir = Path.Combine(Base, "audio", "music");
             if (Directory.Exists(musicDir))
-                _playlist = Directory.GetFiles(musicDir, "*.mp3").ToList();
+            {
+                // Тема меню в игровой плейлист не попадает — иначе она заиграет
+                // и в рейсе, где норовит выскочить между боевыми треками
+                _playlist = Directory.GetFiles(musicDir, "*.mp3")
+                    .Where(f => !Path.GetFileName(f).StartsWith("menu", StringComparison.OrdinalIgnoreCase))
+                    .ToList();
+
+                string menuFile = Path.Combine(musicDir, "Options.mp3");
+                _menuTrack = File.Exists(menuFile) ? menuFile : "";
+            }
 
             string sfxDir = Path.Combine(Base, "audio", "sfx");
             if (Directory.Exists(sfxDir))
-                foreach (string? f in Directory.GetFiles(sfxDir, "*.mp3"))
-                    _sfx[Path.GetFileNameWithoutExtension(f)] = f;
+            {
+                foreach (string ext in new[] { "*.mp3", "*.wav" })
+                    foreach (string? f in Directory.GetFiles(sfxDir, ext))
+                        _sfx[Path.GetFileNameWithoutExtension(f)] = f;
+            }
 
             EnsureOrder();
         }
@@ -101,6 +121,7 @@ namespace Snake3D
 
         public void StartMusic()
         {
+            StopMenuMusic();
             if (!MusicEnabled || _playlist.Count == 0) return;
             _musicWanted = true;
             PlayNextTrack();
@@ -125,14 +146,16 @@ namespace Snake3D
         public void SetMusicEnabled(bool on)
         {
             MusicEnabled = on;
-            if (!on) StopMusic();
+            if (!on) { StopMusic(); StopMenuMusic(); }
             else if (_musicWanted) PlayNextTrack();
+            else if (_menuWanted) StartMenuMusic();
         }
 
         public void SetMusicVolume(double v01)
         {
             MusicVolume = v01;
             _music.Volume = v01;
+            _menuMusic.Volume = v01;
         }
 
         // ── Полёт: постоянный гул, пока идёт игра ──
@@ -208,10 +231,36 @@ namespace Snake3D
                     $"sfx cold-open {name}: {w.Elapsed.TotalMilliseconds:F1} мс");
         }
 
+        //Menu канал
+        private void MenuEnded(object sender, EventArgs e)
+        {
+            if (!_menuWanted || !MusicEnabled || _menuTrack == "") return;
+            _menuMusic.Position = TimeSpan.Zero;
+            _menuMusic.Play();
+        }
+
+        public void StartMenuMusic()
+        {
+            StopMusic();                       // каналы не пересекаются: включили меню — плейлист замолчал
+            if (!MusicEnabled || _menuTrack == "") return;
+            _menuWanted = true;
+            _menuMusic.Open(new Uri(_menuTrack));
+            _menuMusic.Volume = MusicVolume;
+            _menuMusic.Position = TimeSpan.Zero;
+            _menuMusic.Play();
+        }
+
+        public void StopMenuMusic()
+        {
+            _menuWanted = false;
+            _menuMusic.Stop();
+        }
+
         public void Dispose()
         {
             _music.Stop(); _music.Close();
             _flight.Stop(); _flight.Close();
+            _menuMusic.Stop(); _menuMusic.Close();
             foreach (var p in _sfxPool) { p.Stop(); p.Close(); }
         }
 

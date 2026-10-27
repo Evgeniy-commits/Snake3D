@@ -19,15 +19,6 @@
 //моделей — дальше работают лишь дешёвые матрицы.
 
 using Snake3DViewer;
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading;
-using System.Threading.Tasks;
-using System.Windows;
-using System.Windows.Media.Media3D;
-using static System.Net.Mime.MediaTypeNames;
 
 namespace Snake3D
 {
@@ -187,6 +178,19 @@ namespace Snake3D
         private double _superTimer;     // сколько осталось до конца окна
         private int _eatenSinceSuper;   // счётчик съеденных обычных (идёт только при закрытом окне)
 
+        // Щит
+        // Отдельный счётчик: сознательно не связан с _eatenSinceSuper —
+        // у того своя логика окна супер-кристаллов, смешивать нельзя.
+        private int _crystalsSinceShield;
+        private bool _shieldOnField;
+        private double _shieldLifeTimer;    // сколько щиту осталось ждать на арене
+        private bool _protectionActive;     // защита от мин активна
+        private double _protectionTimer;    // сколько защиты осталось
+
+        private readonly List<Point3D> _shields = new();
+        public IReadOnlyList<Point3D> Shields => _shields;
+        public bool ProtectionActive => _protectionActive;
+
         //Для замера производительности
 
         private readonly System.Diagnostics.Stopwatch _renderWatch = new();
@@ -206,6 +210,11 @@ namespace Snake3D
         public event Action? CrystalEaten;
         public event Action? MineHit;
         public event Action? SuperSpawned;
+
+        public event Action? ShieldSpawned;
+        public event Action? ShieldTaken;
+        public event Action? ShieldExpired;   // щит пропал не собранным
+        public event Action? ShieldWoreOff;   // защита от мин закончилась
 
         public SnakeGame(SnakeSceneProxy proxy, double arenaSize, double gridStep,
                                             double segmentRadius, double foodRadius)
@@ -239,7 +248,10 @@ namespace Snake3D
             bool superOk = _proxy.LoadStepModel(System.IO.Path.Combine(modelsDir, "Crystall.stp"), 8, foodRadius * 3.5);
             System.Diagnostics.Trace.WriteLine($"Супер-кристалл: {superOk}");
 
-            System.Diagnostics.Trace.WriteLine($"Модели: tail={tailOk} crystal={crystalOk} mine={mineOk}");
+            // Щит
+            bool shieldOk = _proxy.LoadStepModel(GameConfig.Shield.Path, GameConfig.Shield.ModelId, GameConfig.Shield.Size);
+
+            System.Diagnostics.Trace.WriteLine($"Модели: tail={tailOk} crystal={crystalOk} mine={mineOk} shield={shieldOk}");
 
             // Корабль: корпус, кабина, двигатель — id 5, 6, 7.
             // Габариты: корпус ≈ длина старой головы (3 × радиус сегмента),
@@ -342,6 +354,9 @@ namespace Snake3D
         public void Reset()
         {
             _playTime = 0;
+            IsRunning = false;
+            IsPaused = false;
+            IsGameOver = false;
             _proxy.ClearScene();
 
             // Арена: стены + сетка пересоздаются после каждой чистки.
@@ -411,6 +426,14 @@ namespace Snake3D
 
             _mines.Clear();
             EnsureMines();
+
+            _shields.Clear();
+            _shieldOnField = false;
+            _crystalsSinceShield = 0;
+            _protectionActive = false;
+            _shieldLifeTimer = 0.0;      // таймеры в ноль вместе с флагами:
+            _protectionTimer = 0.0;      // без них значения остаются от прошлой партии
+            _proxy.SetShipShield(false, 0.0);
 
             Score = 0;
             ScoreChanged?.Invoke(this, Score);
@@ -538,7 +561,7 @@ namespace Snake3D
 
             for (int i = 0; i < _crystals.Count; i++)
             {
-                if (Distance(newHead, _crystals[i]) <= _segmentRadius + _foodRadius + tolerance)
+                if (Distance(newHead, _crystals[i]) <= combinedRadius + tolerance)
                 {
                     _proxy.RemoveCrystalAt(i);
                     _crystals.RemoveAt(i);
@@ -564,6 +587,15 @@ namespace Snake3D
                     ScoreChanged?.Invoke(this, Score);
                     CrystalEaten?.Invoke();
 
+                    // Щит: во время активной защиты счёт заморожен —
+                    // отсчёт возобновится после её окончания («счёт по истечении»)
+                    if (!_protectionActive)
+                    {
+                        _crystalsSinceShield++;
+                        if (_crystalsSinceShield >= GameConfig.Shield.TriggerCount)
+                            SpawnShield();
+                    }
+
                     if (_mode == GameMode.Mission && _crystals.Count == 0 && _superCrystals.Count == 0)
                     {
                         TriggerVictory();
@@ -576,7 +608,7 @@ namespace Snake3D
             // Супер-кристаллы: коллизии те же, что у обычного, награда 20
             for (int i = 0; i < _superCrystals.Count; i++)
             {
-                if (Distance(newHead, _superCrystals[i]) <= _segmentRadius + _foodRadius + tolerance)
+                if (Distance(newHead, _superCrystals[i]) <= combinedRadius + tolerance)
                 {
                     Score += SuperCrystalScore;
                     ScoreChanged?.Invoke(this, Score);
@@ -594,14 +626,49 @@ namespace Snake3D
                         return true;
                     }
 
+                    // Щит: супер считается наравне с обычным — тот же freeze во время защиты
+                    if (!_protectionActive)
+                    {
+                        _crystalsSinceShield++;
+                        if (_crystalsSinceShield >= GameConfig.Shield.TriggerCount)
+                            SpawnShield();
+                    }
+
+                    break;
+                }
+            }
+
+            for (int i = 0; i < _shields.Count; i++)
+            {
+                if (Distance(newHead, _shields[i]) <= _segmentRadius + GameConfig.Shield.FallbackRadius + tolerance)
+                {
+                    _proxy.RemoveShield();
+                    _shields.RemoveAt(i);
+                    _shieldOnField = false;
+
+                    _protectionActive = true;
+                    _protectionTimer = GameConfig.Shield.ProtectionTime;
+                    _crystalsSinceShield = 0;   // следующий отсчёт начнётся по истечении защиты
+                    _proxy.SetShipShield(true, GameConfig.Shield.ShipHaloRadius);
+
+                    ShieldTaken?.Invoke();
                     break;
                 }
             }
 
             for (int i = 0; i < _mines.Count; i++)
             {
-                if (Distance(newHead, _mines[i]) <= _segmentRadius + _foodRadius + tolerance)
+                if (Distance(newHead, _mines[i]) <= combinedRadius + tolerance)
                 {
+                    if (_protectionActive)
+                    {
+                        // Щит гасит мину: без штрафа, мина уничтожена
+                        _proxy.RemoveMineAt(i);
+                        _mines.RemoveAt(i);
+                        EnsureMines();
+                        break;
+                    }
+
                     Score -= MineScore;
                     ScoreChanged?.Invoke(this, Score);
 
@@ -731,6 +798,7 @@ namespace Snake3D
                 }
 
                 TickSuperCrystals(dt);   // минута супер-кристаллов: тикает пока игра активна
+                TickShield(dt);
             }
 
             _pulsePhase += dt * (2.0 * Math.PI / 0.4);
@@ -1008,6 +1076,10 @@ namespace Snake3D
                     foreach (var s in _superCrystals)
                         if (Distance(p, s) < _foodRadius * 2 + 2.0) { free = false; break; }
 
+                if (free)
+                    foreach (var s in _shields)
+                        if (Distance(p, s) < GameConfig.Shield.FallbackRadius * 2 + 2.0) { free = false; break; }
+
                 if (free) return p;
             }
             // не нашли за 200 попыток — ставим куда угодно в пределах
@@ -1081,6 +1153,19 @@ namespace Snake3D
             SuperSpawned?.Invoke();
         }
 
+        private void SpawnShield()
+        {
+            if (_shieldOnField || _protectionActive) return;   // второй щит не нужен
+
+            Point3D p = FindFreeSpot();
+            _shields.Add(p);
+            _proxy.AddShieldAt(p.X, p.Y, p.Z, GameConfig.Shield.FallbackRadius);
+            _shieldOnField = true;
+            _shieldLifeTimer = GameConfig.Shield.LifeTime;
+            _crystalsSinceShield = 0;   // счёт к следующему щиту — после его судьбы
+            ShieldSpawned?.Invoke();
+        }
+
         // Таймер окна: выжившие супер-кристаллы возвращаются в пул обычных.
         // Вызывается из Frame — на паузе и после проигрыша минута замирает.
         private void TickSuperCrystals(double dt)
@@ -1099,6 +1184,33 @@ namespace Snake3D
             }
             _superCrystals.Clear();
             _superActive = false;
+        }
+        private void TickShield(double dt)
+        {
+            if (_shieldOnField)
+            {
+                _shieldLifeTimer -= dt;
+                if (_shieldLifeTimer <= 0)
+                {
+                    _proxy.RemoveShield();
+                    _shields.Clear();
+                    _shieldOnField = false;
+                    _crystalsSinceShield = 0;   // не взяли — отсчёт заново
+                    ShieldExpired?.Invoke();
+                }
+            }
+
+            if (_protectionActive)
+            {
+                _protectionTimer -= dt;
+                if (_protectionTimer <= 0)
+                {
+                    _protectionActive = false;
+                    _proxy.SetShipShield(false, 0.0);
+                    _crystalsSinceShield = 0;   // «счёт по истечении» — с нуля
+                    ShieldWoreOff?.Invoke();
+                }
+            }
         }
 
         private void TriggerVictory()

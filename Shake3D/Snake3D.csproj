@@ -41,6 +41,11 @@
 		<None Remove="audio\sfx\engine.mp3" />
 		<None Remove="audio\sfx\explosion.mp3" />
 		<None Remove="audio\sfx\gameover.mp3" />
+		<None Remove="audio\sfx\Options.mp3" />
+		<None Remove="audio\sfx\shieldDown.mp3" />
+		<None Remove="audio\sfx\shieldOff.mp3" />
+		<None Remove="audio\sfx\shieldSpawn.wav" />
+		<None Remove="audio\sfx\shieldUp.mp3" />
 		<None Remove="audio\sfx\victory.mp3" />
 		<None Remove="image\Logo.jpg" />
 		<None Remove="image\Logo.png" />
@@ -51,6 +56,7 @@
 		<None Remove="models\Engine.stp" />
 		<None Remove="models\Mine.stp" />
 		<None Remove="models\Shatl.stp" />
+		<None Remove="models\Shield.stp" />
 		<None Remove="models\Tail.stp" />
 		<Page Include="App.xaml" />
 	</ItemGroup>
@@ -102,6 +108,21 @@
 	  <Content Include="audio\sfx\gameover.mp3">
 	    <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
 	  </Content>
+	  <Content Include="audio\music\Options.mp3">
+	    <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+	  </Content>
+	  <Content Include="audio\sfx\shieldDown.mp3">
+	    <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+	  </Content>
+	  <Content Include="audio\sfx\shieldOff.mp3">
+	    <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+	  </Content>
+	  <Content Include="audio\sfx\shieldSpawn.wav">
+	    <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+	  </Content>
+	  <Content Include="audio\sfx\shieldUp.mp3">
+	    <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+	  </Content>
 	  <Content Include="audio\sfx\superCrystal.mp3">
 	    <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
 	  </Content>
@@ -123,13 +144,15 @@
 	  <Content Include="models\Shatl.stp">
 	    <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
 	  </Content>
+	  <Content Include="models\Shield.stp">
+	    <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+	  </Content>
 	  <Content Include="models\Tail.stp">
 	    <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
 	  </Content>
 	</ItemGroup>
 	<ItemGroup>
-		<None Include="native\**\*.dll" CopyToOutputDirectory="PreserveNewest"
-			Link="%(Filename)%(Extension)" />
+		<None Include="native\**\*.dll" CopyToOutputDirectory="PreserveNewest" Link="%(Filename)%(Extension)" />
 	</ItemGroup>
 </Project>
 
