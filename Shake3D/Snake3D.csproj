@@ -14,6 +14,13 @@
 		<ApplicationIcon>image\Crystal_Hunter.ico</ApplicationIcon>
 	</PropertyGroup>	
 	
+	<!-- <ItemGroup> -->
+	  <!-- <None Include="..\Snake3D.Viewer\bin\$(Configuration)\Snake3D.Viewer.dll" -->
+			<!-- CopyToOutputDirectory="PreserveNewest" -->
+			<!-- CopyToPublishDirectory="PreserveNewest" -->
+			<!-- Link="Snake3D.Viewer.dll" /> -->
+	<!-- </ItemGroup> -->
+	
 	<ItemGroup>
 		<ProjectReference Include="..\Snake3D.Viewer\Snake3D.Viewer.vcxproj" />
 	</ItemGroup>

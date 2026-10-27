@@ -1,4 +1,8 @@
-Shake3D/installer/
-**/bin/
-**/obj/
-*.exe
+.vs/
+x64/
+Snake3D.Viewer/x64/
+*.user
+Shake3D/Snake3D.csproj.user
+Snake3D.Viewer/Snake3D.Viewer.vcxproj.user
+obj/
+bin/

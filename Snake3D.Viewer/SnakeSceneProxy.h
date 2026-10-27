@@ -1814,7 +1814,7 @@ namespace Snake3DViewer
 		bool InView(double px, double py, double pz, double maxDist)
 		{
 			double dx = px - _camEyeX;
-			double dy = py - _camEyeY;
+			double dy = py - _camEyeY;;
 			double dz = pz - _camEyeZ;
 			double dist = sqrt(dx * dx + dy * dy + dz * dz);
 
