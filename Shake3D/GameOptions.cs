@@ -13,6 +13,7 @@ namespace Snake3D
         public bool CockpitView;
         public bool TapControl;
         public bool WallsOn;
+        public bool Fullscreen;
         public double Speed;
         public double ArenaSize;
         public double GridStep;

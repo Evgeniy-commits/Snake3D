@@ -1,4 +1,7 @@
-﻿//Краткий «подкапотный» конвейер за один кадр
+﻿// ═══════════════════════════════════════════════════════════════════
+// БЛОК 1. ВВОДНЫЙ КОММЕНТАРИЙ: конвейер одного кадра
+// ═══════════════════════════════════════════════════════════════════
+//Краткий «подкапотный» конвейер за один кадр
 //WPF DispatcherTimer даёт dt (например, 16.6 мс).
 
 //SnakeGame.Frame(dt):
@@ -22,6 +25,9 @@ using Snake3DViewer;
 
 namespace Snake3D
 {
+    // ═══════════════════════════════════════════════════════════════════
+    // БЛОК 2. МАТЕМАТИКА: точка и вектор в 3D
+    // ═══════════════════════════════════════════════════════════════════
     public struct Point3D
     {
         public double X, Y, Z;
@@ -63,50 +69,25 @@ namespace Snake3D
         }
     }
 
+    // ═══════════════════════════════════════════════════════════════════
+    // БЛОК 3. SNAKEGAME: игровая логика
+    // ═══════════════════════════════════════════════════════════════════
     public class SnakeGame
     {
+        // ── 3.1 Ядро: прокси, тело змейки, корабль ──
         private readonly SnakeSceneProxy _proxy;
         private List<Point3D> _segments;
 
         private readonly bool _shipLoaded;
         private double _elapsed;            //Время пульса двигателя
-       
-        //кристаллы
-        private readonly List<Point3D> _crystals = new();
-        public IReadOnlyList<Point3D> Crystals => _crystals;
 
-        //мины
-        private readonly List<Point3D> _mines = new();
-        public const int MineScore = 50;
-        public IReadOnlyList<Point3D> Mines => _mines;
-
-        //Режим «без стен» (клавиша T)
-        public bool WallsOff { get; private set; }
-        // Радиус зоны предупреждения: 15 единиц = 4 
-        private double WarnRadius => 5.0 * _cellSize;
-        private double _cellSize;   // ДОЛЖЕН совпадать с шагом CreateGrid
-
-        // Активные подсветки: (ось, сторона, i, j).
-        // Diff-множество: прокси вызываем только для различий.
-        //private readonly HashSet<(int axis, int side, int i, int j)> _highlightCells = new();
-        // Активные подсветки: ключ → текущий уровень яркости 0..1
-        private readonly Dictionary<(int axis, int side, int i, int j), double> _highlightCells = new();
-
-        // Фаза «дыхания»: полная синусоида за 0,4 секунды
-        private double _pulsePhase;
-
-
-        private Vector3D _forward;   // куда летим
-        private Vector3D _up;        // где верх
-
-        private int _pendingTurn = 0;  // 0=нет, 1=лево, 2=право, 3=вверх, 4=вниз
-
-        private readonly double  _segmentRadius;
-        private readonly double  _step = GameConfig.StepLength;
-        private readonly double  _foodRadius;
+        private readonly double _segmentRadius;
+        private readonly double _step = GameConfig.StepLength;
+        private readonly double _foodRadius;
         private readonly double _arenaSize;
         private Random _rand = new Random();
 
+        // ── 3.2 Состояние партии ──
         public int Score { get; private set; }
         public bool IsGameOver { get; private set; }
         public bool IsRunning { get; private set; }
@@ -117,11 +98,8 @@ namespace Snake3D
         // и поворот камеры не видно.
         public bool SuppressCamera { get; set; }
 
-        public event EventHandler<int>? ScoreChanged;
-        public event EventHandler? GameOver;
-
         //Новое меню
-        private GameMode _mode;                 
+        private GameMode _mode;
         private int _missionTotal;
         private double _playTime;
 
@@ -130,7 +108,58 @@ namespace Snake3D
         public int MissionLeft => _crystals.Count + _superCrystals.Count;
         public double PlayTime => _playTime;
 
-        public event EventHandler? Victory;
+        //private const double BaseLogicInterval = 0.05;
+        public double SpeedMultiplier { get; set; } = 1.0;
+        public double LogicInterval =>
+            _step / (GameConfig.BaseStepsPerSecond * Math.Max(0.25, SpeedMultiplier));
+
+        // ── 3.3 Объекты арены: кристаллы и мины ──
+        //кристаллы
+        private readonly List<Point3D> _crystals = new();
+        public IReadOnlyList<Point3D> Crystals => _crystals;
+
+        //мины
+        private readonly List<Point3D> _mines = new();
+        public const int MineScore = 50;
+        public IReadOnlyList<Point3D> Mines => _mines;
+
+        private int _mineCount = GameConfig.DefaultMineCount;
+        private int _crystalCount = GameConfig.DefaultCrystalCount;
+
+        // ── 3.4 Супер-кристаллы ──
+        // Супер-кристаллы: три штуки, всплывают после 10 съеденных обычных,
+        // живут минуту, затем возвращаются в пул обычных
+        public const int SuperCrystalScore = 20;
+        private const int SuperBatchCount = 3;
+        private const int SuperTriggerCount = 10;
+        private const double SuperDuration = 60.0;
+
+        private readonly List<Point3D> _superCrystals = new();
+        public IReadOnlyList<Point3D> SuperCrystals => _superCrystals;
+
+        private bool _superActive;      // окно супер-кристаллов открыто
+        private double _superTimer;     // сколько осталось до конца окна
+        private int _eatenSinceSuper;   // счётчик съеденных обычных (идёт только при закрытом окне)
+
+        // ── 3.5 Щит ──
+        // Щит
+        // Отдельный счётчик: сознательно не связан с _eatenSinceSuper —
+        // у того своя логика окна супер-кристаллов, смешивать нельзя.
+        private int _crystalsSinceShield;
+        private bool _shieldOnField;
+        private double _shieldLifeTimer;    // сколько щиту осталось ждать на арене
+        private bool _protectionActive;     // защита от мин активна
+        private double _protectionTimer;    // сколько защиты осталось
+
+        private readonly List<Point3D> _shields = new();
+        public IReadOnlyList<Point3D> Shields => _shields;
+        public bool ProtectionActive => _protectionActive;
+
+        // ── 3.6 Ориентация и повороты ──
+        private Vector3D _forward;   // куда летим
+        private Vector3D _up;        // где верх
+
+        private int _pendingTurn = 0;  // 0=нет, 1=лево, 2=право, 3=вверх, 4=вниз
 
         //Плавный поворот
         private const double TurnSpeedRadPerSecond = Math.PI; //90 градусов в секунду
@@ -149,11 +178,7 @@ namespace Snake3D
         private DateTime? _downPressTime;
         private bool _smoothActive;
 
-        //private const double BaseLogicInterval = 0.05;
-        public double SpeedMultiplier { get; set; } = 1.0;
-        public double LogicInterval =>
-            _step / (GameConfig.BaseStepsPerSecond * Math.Max(0.25, SpeedMultiplier));
-
+        // ── 3.7 Интерполяция (fixed timestep + alpha) ──
         private readonly List<Point3D> _prevPositions = new();
         private readonly List<Point3D> _nextPositions = new();
         private Vector3D _prevForward, _nextForward;
@@ -161,38 +186,40 @@ namespace Snake3D
         private DateTime _lastLogicTick = DateTime.UtcNow;
         private double _logicAccumulator = 0;
 
-        private int _mineCount = GameConfig.DefaultMineCount;
-        private int _crystalCount = GameConfig.DefaultCrystalCount;
+        // ── 3.8 Режим «без стен» и подсветка границы ──
+        //Режим «без стен» (клавиша T)
+        public bool WallsOff { get; private set; }
+        // Радиус зоны предупреждения: 15 единиц = 4 
+        private double WarnRadius => 5.0 * _cellSize;
+        private double _cellSize;   // ДОЛЖЕН совпадать с шагом CreateGrid
 
-        // Супер-кристаллы: три штуки, всплывают после 10 съеденных обычных,
-        // живут минуту, затем возвращаются в пул обычных
-        public const int SuperCrystalScore = 20;
-        private const int SuperBatchCount = 3;
-        private const int SuperTriggerCount = 10;
-        private const double SuperDuration = 60.0;
+        // Активные подсветки: (ось, сторона, i, j).
+        // Diff-множество: прокси вызываем только для различий.
+        //private readonly HashSet<(int axis, int side, int i, int j)> _highlightCells = new();
+        // Активные подсветки: ключ → текущий уровень яркости 0..1
+        private readonly Dictionary<(int axis, int side, int i, int j), double> _highlightCells = new();
 
-        private readonly List<Point3D> _superCrystals = new();
-        public IReadOnlyList<Point3D> SuperCrystals => _superCrystals;
+        // Фаза «дыхания»: полная синусоида за 0,4 секунды
+        private double _pulsePhase;
 
-        private bool _superActive;      // окно супер-кристаллов открыто
-        private double _superTimer;     // сколько осталось до конца окна
-        private int _eatenSinceSuper;   // счётчик съеденных обычных (идёт только при закрытом окне)
+        // ── 3.9 События (внешний мир: UI и звук) ──
+        public event EventHandler<int>? ScoreChanged;
+        public event EventHandler? GameOver;
 
-        // Щит
-        // Отдельный счётчик: сознательно не связан с _eatenSinceSuper —
-        // у того своя логика окна супер-кристаллов, смешивать нельзя.
-        private int _crystalsSinceShield;
-        private bool _shieldOnField;
-        private double _shieldLifeTimer;    // сколько щиту осталось ждать на арене
-        private bool _protectionActive;     // защита от мин активна
-        private double _protectionTimer;    // сколько защиты осталось
+        public event EventHandler? Victory;
 
-        private readonly List<Point3D> _shields = new();
-        public IReadOnlyList<Point3D> Shields => _shields;
-        public bool ProtectionActive => _protectionActive;
+        //Звуки
+        public event Action? CrystalEaten;
+        public event Action? MineHit;
+        public event Action? SuperSpawned;
 
+        public event Action? ShieldSpawned;
+        public event Action? ShieldTaken;
+        public event Action? ShieldExpired;   // щит пропал не собранным
+        public event Action? ShieldWoreOff;   // защита от мин закончилась
+
+        // ── 3.10 Замеры производительности ──
         //Для замера производительности
-
         private readonly System.Diagnostics.Stopwatch _renderWatch = new();
         private readonly System.Diagnostics.Stopwatch _frameWatch = new();
         private double _frameMsSum;
@@ -206,16 +233,9 @@ namespace Snake3D
         private double _dtSum;
         private double _tHead;
 
-        //Звуки
-        public event Action? CrystalEaten;
-        public event Action? MineHit;
-        public event Action? SuperSpawned;
-
-        public event Action? ShieldSpawned;
-        public event Action? ShieldTaken;
-        public event Action? ShieldExpired;   // щит пропал не собранным
-        public event Action? ShieldWoreOff;   // защита от мин закончилась
-
+        // ═══════════════════════════════════════════════════════════════════
+        // БЛОК 4. ЖИЗНЕННЫЙ ЦИКЛ: конструктор, старт, пауза, опции, Reset
+        // ═══════════════════════════════════════════════════════════════════
         public SnakeGame(SnakeSceneProxy proxy, double arenaSize, double gridStep,
                                             double segmentRadius, double foodRadius)
         {
@@ -440,6 +460,10 @@ namespace Snake3D
             _proxy.Redraw();
         }
 
+        // ═══════════════════════════════════════════════════════════════════
+        // БЛОК 5. ВВОД: удержания клавиш, тап-повороты
+        // ═══════════════════════════════════════════════════════════════════
+
         // Вызывается из View при КАЖДОМ KeyDown (в том числе при автоповторе WPF).
         // Время нажатия ставим только один раз — иначе автоповтор сбросит таймер
         // и плавный поворот никогда не включится.
@@ -496,6 +520,10 @@ namespace Snake3D
             _pitchRate = 0.0;
             _smoothActive = false;
         }
+
+        // ═══════════════════════════════════════════════════════════════════
+        // БЛОК 6. КОНВЕЙЕР ТИКА: ApplyTurn → Advance → CheckCollisions → Update → Frame
+        // ═══════════════════════════════════════════════════════════════════
 
         // Шаг 1 конвейера: применить накопленный поворот
         private void ApplyTurn()
@@ -846,6 +874,10 @@ namespace Snake3D
             }
         }
 
+        // ═══════════════════════════════════════════════════════════════════
+        // БЛОК 7. РЕНДЕР: интерполяция и отправка в прокси
+        // ═══════════════════════════════════════════════════════════════════
+
         //Каждая позиция сегмента вычисляется как lerp(prev, next, alpha).
         //То есть визуально змейка «плывёт» между логическими позициями,
         //а не прыгает раз в 50 мс.Аналогично интерполируются _forward и _up,
@@ -929,6 +961,9 @@ namespace Snake3D
             _tRedraw += _watch.Elapsed.TotalMilliseconds;
         }
 
+        // ═══════════════════════════════════════════════════════════════════
+        // БЛОК 8. ПОВОРОТЫ: тап/удержание
+        // ═══════════════════════════════════════════════════════════════════
         private void UpdateSmoothTurn()
         {
             if (!TapTurnEnabled) return; // в плавном режиме всё решают StartTurn/ReleaseTurn
@@ -962,6 +997,9 @@ namespace Snake3D
             else _yawRate = 0;
         }
 
+        // ═══════════════════════════════════════════════════════════════════
+        // БЛОК 9. ПОДСВЕТКА ГРАНИЦЫ (режим «без стен»)
+        // ═══════════════════════════════════════════════════════════════════
         // Подсветка границы в режиме «без стен».
         // Для каждой из 6 плоскостей: дистанция головы до плоскости,
         // точка удара курса и пятно подсветки, растущее по мере приближения.
@@ -1042,6 +1080,10 @@ namespace Snake3D
 
             _proxy.CommitHighlights();   // одна перерисовка на весь тик
         }
+
+        // ═══════════════════════════════════════════════════════════════════
+        // БЛОК 10. СПАВН И ТАЙМЕРЫ ОБЪЕКТОВ
+        // ═══════════════════════════════════════════════════════════════════
 
         //Поиск свободного места(FindFreeSpot)
         //Случайная точка с проверкой: не на змейке, не на кристалле,
@@ -1213,6 +1255,9 @@ namespace Snake3D
             }
         }
 
+        // ═══════════════════════════════════════════════════════════════════
+        // БЛОК 11. ФИНАЛ ПАРТИИ И УТИЛИТЫ
+        // ═══════════════════════════════════════════════════════════════════
         private void TriggerVictory()
         {
             IsRunning = false;
@@ -1233,6 +1278,10 @@ namespace Snake3D
             double dz = a.Z - b.Z;
             return Math.Sqrt(dx * dx + dy * dy + dz * dz);
         }
+
+        // ═══════════════════════════════════════════════════════════════════
+        // БЛОК 12. МАТЕМАТИКА ПОВОРОТОВ (Родригес)
+        // ═══════════════════════════════════════════════════════════════════
 
         // Поворот рысканья (вокруг up): лево/право
         private void RotateYaw(double sign)
@@ -1292,7 +1341,9 @@ namespace Snake3D
     }
 }
 
-
+// ═══════════════════════════════════════════════════════════════════
+// БЛОК 13. ПОДВАЛ: заметки по подсветке
+// ═══════════════════════════════════════════════════════════════════
 //ДЛЯ ПОДСВЕТКИ
 //Диагностика коллизии. Причина запаздывания — рассинхрон двух систем координат
 //одной и той же арены: стены и сетка построены в координатах ±arenaSize/2,

@@ -29,6 +29,8 @@ namespace Snake3D
         private List<int> _order = new List<int>();
         private int _orderPos = -1;
         private bool _musicWanted;
+        private bool _menuThemeOn;
+        private bool _playlistWasOn;   // играл ли плейлист до темы меню
 
         private readonly MediaPlayer _flight;
         private bool _flightWanted;
@@ -73,14 +75,13 @@ namespace Snake3D
             string musicDir = Path.Combine(Base, "audio", "music");
             if (Directory.Exists(musicDir))
             {
+                string menuFile = Path.Combine(musicDir, "Options.mp3");
+                _menuTrack = File.Exists(menuFile) ? menuFile : "";
                 // Тема меню в игровой плейлист не попадает — иначе она заиграет
                 // и в рейсе, где норовит выскочить между боевыми треками
                 _playlist = Directory.GetFiles(musicDir, "*.mp3")
                     .Where(f => !Path.GetFileName(f).StartsWith("menu", StringComparison.OrdinalIgnoreCase))
-                    .ToList();
-
-                string menuFile = Path.Combine(musicDir, "Options.mp3");
-                _menuTrack = File.Exists(menuFile) ? menuFile : "";
+                    .ToList();                
             }
 
             string sfxDir = Path.Combine(Base, "audio", "sfx");
@@ -146,9 +147,11 @@ namespace Snake3D
         public void SetMusicEnabled(bool on)
         {
             MusicEnabled = on;
-            if (!on) { StopMusic(); StopMenuMusic(); }
-            else if (_musicWanted) PlayNextTrack();
-            else if (_menuWanted) StartMenuMusic();
+            if (!on)
+            {
+                StopMenuMusic();   // ← тема — тоже музыка, её гасим вместе с плейлистом
+                StopMusic();       // если StopMusic здесь уже есть — не дублируйте
+            }
         }
 
         public void SetMusicVolume(double v01)
@@ -241,7 +244,9 @@ namespace Snake3D
 
         public void StartMenuMusic()
         {
-            StopMusic();                       // каналы не пересекаются: включили меню — плейлист замолчал
+            if (_menuWanted) return;                    // тема уже играет — не начинаем заново
+            _playlistWasOn = _musicWanted && MusicEnabled;
+            if (_playlistWasOn) _music.Pause();         // плейлист замолкает на время темы
             if (!MusicEnabled || _menuTrack == "") return;
             _menuWanted = true;
             _menuMusic.Open(new Uri(_menuTrack));
@@ -252,8 +257,15 @@ namespace Snake3D
 
         public void StopMenuMusic()
         {
+            if (!_menuWanted) return;
             _menuWanted = false;
             _menuMusic.Stop();
+            _menuMusic.Close();
+            if (_playlistWasOn && MusicEnabled)         // меню закрылось — плейлист возвращается
+            {
+                _playlistWasOn = false;
+                _music.Play();                          // с того же места, где прервались
+            }
         }
 
         public void Dispose()

@@ -25,9 +25,15 @@
 
 #pragma once
 #pragma warning(disable: 4263 4264)
+
+// ═══════════════════════════════════════════════════════════════════
+// БЛОК 1. INCLUDES
+// ═══════════════════════════════════════════════════════════════════
+
 #include "pch.h"
 #include <Windows.h>
 #include <Standard_Version.hxx>
+
 #include <Aspect_DisplayConnection.hxx>
 #include <WNT_Window.hxx>
 #include <OpenGl_GraphicDriver.hxx>
@@ -50,8 +56,6 @@
 #include <gp_XYZ.hxx>
 #include <vector>
 #include <cmath>
-#include <vcclr.h>
-#include <msclr/marshal.h>
 #include <Graphic3d_Camera.hxx>
 #include <STEPControl_Reader.hxx>
 #include <IFSelect_ReturnStatus.hxx>
@@ -77,7 +81,8 @@
 //Super кристаллы - оболочка
 #include <gp_Circ.hxx>
 
-
+#include <vcclr.h>
+#include <msclr/marshal.h>
 #include <msclr/marshal_cppstd.h>
 
 #pragma comment(lib, "TKernel.lib")
@@ -104,13 +109,16 @@ namespace Snake3DViewer
 	public ref class SnakeSceneProxy
 	{
 	private:
+		// ═══════════════════════════════════════════════════════════════
+		// БЛОК 2. ПОЛЯ КЛАССА
+		// ═══════════════════════════════════════════════════════════════
+
+		// ── 2.1 OCCT-хендлы: рендер-инфраструктура и свет ──
 		//Управляемый класс нельзя хранить напрямую в полях нативные объекты — 
 		//сборщик мусора может переместить объект в памяти, а нативный указатель 
 		//«не узнает» об этом.Поэтому здесь используется NCollection_Haft — 
 		//обёртка OCCT, которая хранит указатель на хендл в куче и не даёт 
 		//GC двигать сам хендл :
-
-		// OCCT-хендлы через NCollection_Haft
 		NCollection_Haft<Handle(V3d_Viewer)> _viewer;
 		NCollection_Haft<Handle(V3d_View)> _view;
 		NCollection_Haft<Handle(AIS_InteractiveContext)> _aisContext;
@@ -119,56 +127,17 @@ namespace Snake3DViewer
 		// Направление обновляется в SetOrientation вместе с курсом змейки.
 		NCollection_Haft<Handle(V3d_DirectionalLight)> _sunLight;
 
-		// Корабль: части, их подгоночные трансформации, индекс двигателя
-		NCollection_DataMap<int, Handle(AIS_Shape)>* _shipParts;
-		NCollection_DataMap<int, gp_Trsf>* _fitTrsf;
-		NCollection_Haft<Handle(AIS_Shape)> _enginePart;
-		double _engineGlowR = 0.30, _engineGlowG = 0.55, _engineGlowB = 1.0;
-
-		// Нативные указатели на векторы 
-		std::vector<Handle(AIS_Shape)>* _snakeSegments;
-		std::vector<Handle(AIS_Shape)>* _walls;
-		std::vector<Handle(AIS_Shape)>* _grid;
-		std::vector<gp_Pnt>* _basePositions;
-		std::vector<gp_Pnt>* _positions;
-		std::vector<Handle(AIS_Shape)>* _crystals;
-		std::vector<gp_Pnt>* _crystalBase;
-		// Малые ореолы обычных кристаллов: индекс совпадает с индексом кристалла.
-		std::vector<Handle(AIS_Shape)>* _crystalHalos;
-		std::vector<Handle(AIS_Shape)>* _superCrystals;
-		std::vector<gp_Pnt>* _superBase;
-		std::vector<Handle(AIS_Shape)>* _superSpheres;
-		std::vector<Handle(AIS_Shape)>* _mines;
-		std::vector<gp_Pnt>* _mineBase;
-		std::vector<TopoDS_Shape*>* _models;            // 0=голова, 1=хвост, 2=кристалл, 4=мина
-		std::vector<gp_Vec>* _segmentDirs;
-
-		// ── Щит: одна штука на арене, модель (id 9) либо fallback-сфера.
-		// Оболочка — клетка из трёх кругов, как у супер-кристалла, но в своём цвете.
-		std::vector<Handle(AIS_Shape)>* _shields;
-		std::vector<gp_Pnt>* _shieldBase;
-		std::vector<Handle(AIS_Shape)>* _shieldShells;
-
-		// Ореол корабля при активной защите: каркас из кругов, ставится кадром PlaceShip.
-		NCollection_Haft<Handle(AIS_Shape)> _shipShield;
-		bool _shipShieldOn = false;
-
+		// ── 2.2 Камера и ориентация ──
 		double _dirX, _dirY, _dirZ;
 		double _upX, _upY, _upZ;
 
 		double _camEyeX = 0, _camEyeY = 0, _camEyeZ = 0;
 		double _camDirX = 0, _camDirY = 1, _camDirZ = 0;
 
-		//Для STEP
-		TopoDS_Shape* _headModel;
-
 		//Для камеры
 		int _viewMode = 0; // 0 = вид следования (дефолт), 1 = вид из кабины
 
-		//Анимация
-		double _spinAngle = 0.0;
-		static constexpr double SpinSpeed = 3.0;
-
+		// ── 2.3 Константы (модельные и стилевые) ──
 		static const double WallThickness = 1.0;
 		static const double WallTransparency = 0.75;
 		static const double HighlightLift = 0.02;
@@ -178,6 +147,55 @@ namespace Snake3DViewer
 		static const int ModelCrystal = 2;
 		static const int ModelMine = 4;
 
+		// ── 2.4 Змейка (голова + хвост) ──
+		// Нативные указатели на векторы 
+		std::vector<Handle(AIS_Shape)>* _snakeSegments;
+		std::vector<gp_Pnt>* _basePositions;
+		std::vector<gp_Pnt>* _positions;
+		std::vector<gp_Vec>* _segmentDirs;
+
+		//Для STEP
+		TopoDS_Shape* _headModel;
+
+		// ── 2.5 Корабль: части, подгоночные трансформации, двигатель ──
+		NCollection_DataMap<int, Handle(AIS_Shape)>* _shipParts;
+		NCollection_DataMap<int, gp_Trsf>* _fitTrsf;
+		NCollection_Haft<Handle(AIS_Shape)> _enginePart;
+		double _engineGlowR = 0.30, _engineGlowG = 0.55, _engineGlowB = 1.0;
+
+		// ── 2.6 Кристаллы (обычные) ──
+		std::vector<Handle(AIS_Shape)>* _crystals;
+		std::vector<gp_Pnt>* _crystalBase;
+		// Малые ореолы обычных кристаллов: индекс совпадает с индексом кристалла.
+		std::vector<Handle(AIS_Shape)>* _crystalHalos;
+
+		// ── 2.7 Супер-кристаллы ──
+		std::vector<Handle(AIS_Shape)>* _superCrystals;
+		std::vector<gp_Pnt>* _superBase;
+		std::vector<Handle(AIS_Shape)>* _superSpheres;
+
+		// ── 2.8 Щиты ──
+		// Щит: одна штука на арене, модель (id 9) либо fallback-сфера.
+		// Оболочка — клетка из трёх кругов, как у супер-кристалла, но в своём цвете.
+		std::vector<Handle(AIS_Shape)>* _shields;
+		std::vector<gp_Pnt>* _shieldBase;
+		std::vector<Handle(AIS_Shape)>* _shieldShells;
+		// Ореол корабля при активной защите: каркас из кругов, ставится кадром PlaceShip.
+		NCollection_Haft<Handle(AIS_Shape)> _shipShield;
+		bool _shipShieldOn = false;
+
+		// ── 2.9 Мины ──
+		std::vector<Handle(AIS_Shape)>* _mines;
+		std::vector<gp_Pnt>* _mineBase;
+
+		// ── 2.10 Загруженные STEP-модели (индексы kind) ──
+		std::vector<TopoDS_Shape*>* _models;            // 0=голова, 1=хвост, 2=кристалл, 4=мина
+
+		// ── 2.11 Декорации арены: стены, сетка, звёзды, подсветка границы ──
+		std::vector<Handle(AIS_Shape)>* _walls;
+		std::vector<Handle(AIS_Shape)>* _grid;
+		// Звёздное небо: три групповых компаунда по яркости ──
+		std::vector<Handle(AIS_Shape)>* _stars;
 		//Режим «без стен»: подсветка ячеек границы
 		// Кэш подсвеченных ячеек: ключ → грань. Грань создаётся один раз,
 		// дальше только Display/Erase — дешёвые операции.
@@ -185,53 +203,14 @@ namespace Snake3DViewer
 		double _arenaHalf;  // половина арены (границы подсветки)
 		double _cellSize;   // шаг сетки = размер ячейки
 
-		// ── Звёздное небо: три групповых компаунда по яркости ──
-		std::vector<Handle(AIS_Shape)>* _stars;
-
-		//Для стен
-		void AddWallBox(const gp_Pnt& p, double dx, double dy, double dz)
-		{
-			TopoDS_Shape w = BRepPrimAPI_MakeBox(p, dx, dy, dz).Shape();
-			Handle(AIS_Shape) aisShape = new AIS_Shape(w);
-			aisShape->SetDisplayMode(1);
-			aisShape->SetColor(Quantity_Color(0.18, 0.18, 0.22, Quantity_TOC_RGB));
-			aisShape->SetTransparency(0.75);
-
-			// Скрыть граничные линии рёбер: по умолчанию AIS рисует контуры
-			// граней серыми линиями — на светлом фоне они пробиваются.
-			//aisShape->Attributes()->SetFaceBoundaryDraw(Standard_False);
-
-			// вместо SetFaceBoundaryDraw(false):
-			Handle(Prs3d_LineAspect) boundary = new Prs3d_LineAspect(
-				Quantity_Color(0.18, 0.18, 0.22, Quantity_TOC_RGB), // цвет = цвет стены
-				Aspect_TOL_SOLID,
-				1.0);                                               // толщина 1 px
-			aisShape->Attributes()->SetFaceBoundaryAspect(boundary);
-
-			_walls->push_back(aisShape);
-			_aisContext()->Display(aisShape, Standard_True);
-		}
-
-		// Кадр (позиция + forward + up) → gp_Trsf. Общий для головы (MoveHead)
-		// и корабля (PlaceShip): локальный X — right, Y — forward, Z — up.
-		gp_Trsf TrsfFromFrame(double x, double y, double z,
-			double fx, double fy, double fz,
-			double ux, double uy, double uz)
-		{
-			gp_Dir fwd(fx, fy, fz);
-			gp_Dir up(ux, uy, uz);
-			gp_Dir right(fwd.Crossed(up));
-			up = gp_Dir(right.Crossed(fwd));
-
-			gp_Trsf trsf;
-			trsf.SetValues(
-				right.X(), fwd.X(), up.X(), x,
-				right.Y(), fwd.Y(), up.Y(), y,
-				right.Z(), fwd.Z(), up.Z(), z);
-			return trsf;
-		}
+		// ── 2.12 Анимация ──
+		double _spinAngle = 0.0;
+		static constexpr double SpinSpeed = 3.0;		
 
 	public:
+		// ═══════════════════════════════════════════════════════════════
+		// БЛОК 3. ЖИЗНЕННЫЙ ЦИКЛ: конструктор, деструктор, финализатор
+		// ═══════════════════════════════════════════════════════════════
 		//Доступ через скобки: _viewer() = new V3d_Viewer(...) — 
 		//это разыменование хафта (получение ссылки на сам Handle).
 
@@ -353,6 +332,10 @@ namespace Snake3DViewer
 			delete _shipParts;	   _shipParts = nullptr;
 			delete _fitTrsf;	   _fitTrsf = nullptr;
 		}
+
+		// ═══════════════════════════════════════════════════════════════
+		// БЛОК 4. ЗАГРУЗКА STEP-МОДЕЛЕЙ
+		// ═══════════════════════════════════════════════════════════════
 
 		TopoDS_Shape* GetModel(int kind)
 		{
@@ -536,6 +519,10 @@ namespace Snake3DViewer
 			return true;
 		}
 
+		// ═══════════════════════════════════════════════════════════════
+		// БЛОК 5. ИНИЦИАЛИЗАЦИЯ СЦЕНЫ
+		// ═══════════════════════════════════════════════════════════════
+
 		//Инициализация 3д сцены - построение графической иерархии.
 		bool Initialize(System::IntPtr windowHandle)
 		{
@@ -671,6 +658,10 @@ namespace Snake3DViewer
 			if (!_aisContext().IsNull())
 				_aisContext()->UpdateCurrentViewer();
 		}
+
+		// ═══════════════════════════════════════════════════════════════
+		// БЛОК 6. ЗМЕЙКА: сегменты, голова, движение
+		// ═══════════════════════════════════════════════════════════════
 
 		void AddSegment(double x, double y, double z, double radius, int index)
 		{
@@ -858,6 +849,49 @@ namespace Snake3DViewer
 			(*_snakeSegments)[headIndex]->SetLocalTransformation(trsf);			
 		}
 
+		void RemoveAllSnake()
+		{
+			for (auto& seg : *_snakeSegments)
+			{
+				if (seg.IsNull()) continue;   // заглушка корабля — стирать нечего
+				if (!_aisContext().IsNull())
+					_aisContext()->Erase(seg, Standard_False);
+			}
+			_snakeSegments->clear();
+			_basePositions->clear();
+			_positions->clear();
+			_segmentDirs->clear();
+			if (!_aisContext().IsNull())
+				_aisContext()->UpdateCurrentViewer();
+		}
+
+		// ═══════════════════════════════════════════════════════════════
+		// БЛОК 7. ДЕКОРАЦИИ АРЕНЫ: стены, сетка, звёзды
+		// ═══════════════════════════════════════════════════════════════
+		//Для стен - вспомогательный
+		void AddWallBox(const gp_Pnt& p, double dx, double dy, double dz)
+		{
+			TopoDS_Shape w = BRepPrimAPI_MakeBox(p, dx, dy, dz).Shape();
+			Handle(AIS_Shape) aisShape = new AIS_Shape(w);
+			aisShape->SetDisplayMode(1);
+			aisShape->SetColor(Quantity_Color(0.18, 0.18, 0.22, Quantity_TOC_RGB));
+			aisShape->SetTransparency(0.75);
+
+			// Скрыть граничные линии рёбер: по умолчанию AIS рисует контуры
+			// граней серыми линиями — на светлом фоне они пробиваются.
+			//aisShape->Attributes()->SetFaceBoundaryDraw(Standard_False);
+
+			// вместо SetFaceBoundaryDraw(false):
+			Handle(Prs3d_LineAspect) boundary = new Prs3d_LineAspect(
+				Quantity_Color(0.18, 0.18, 0.22, Quantity_TOC_RGB), // цвет = цвет стены
+				Aspect_TOL_SOLID,
+				1.0);                                               // толщина 1 px
+			aisShape->Attributes()->SetFaceBoundaryAspect(boundary);
+
+			_walls->push_back(aisShape);
+			_aisContext()->Display(aisShape, Standard_True);
+		}
+
 		void CreateWalls(double arenaSize)
 		{
 			double half = arenaSize / 2.0;
@@ -951,515 +985,6 @@ namespace Snake3DViewer
 			_grid->push_back(aisEdge);
 		}
 
-		void ClearCrystals()
-		{
-			for (auto& c : *_crystals)
-				if (!c.IsNull() && !_aisContext().IsNull())
-					_aisContext()->Erase(c, Standard_False);
-			//ореол
-			for (auto& h : *_crystalHalos)
-				if (!h.IsNull() && !_aisContext().IsNull())
-					_aisContext()->Erase(h, Standard_False);
-			_crystalHalos->clear();
-			_crystals->clear();
-		}
-
-		void AddCrystalAt(int index, double x, double y, double z, double radius)
-		{
-			gp_Pnt center(x, y, z);
-			Handle(AIS_Shape) aisShape;
-			TopoDS_Shape* model = GetModel(2);
-
-			if (model != nullptr)
-			{
-				aisShape = new AIS_Shape(*model);
-				aisShape->SetColor(Quantity_Color(0.40, 0.65, 1.00, Quantity_TOC_RGB)); // светло-синий
-				aisShape->SetTransparency(0.25);
-			}
-			else
-			{
-				BRepPrimAPI_MakeSphere sphere(center, radius);
-				aisShape = new AIS_Shape(sphere.Shape());
-				aisShape->SetColor(Quantity_Color(Quantity_NOC_CYAN));
-			}
-			aisShape->SetDisplayMode(1);
-
-			if (index >= (int)_crystals->size())    _crystals->resize(index + 1);
-			if (index >= (int)_crystalBase->size()) _crystalBase->resize(index + 1, gp_Pnt(0, 0, 0));
-			(*_crystals)[index] = aisShape;
-			(*_crystalBase)[index] = center;
-
-			// Малый ореол вокруг кристалла: обозначает «съедобность».
-			// Два круга, радиус чуть меньше высоты кристалла.
-			// позицию и ориентацию каждый кадр задаёт UpdateCrystalOrientations.
-
-			const double haloR = radius * 1.25;
-			TopoDS_Compound halo;
-			BRep_Builder hb;
-			hb.MakeCompound(halo);
-
-			// Оси наклонены на 45° от вертикали: при вращении вокруг up меняется
-			// азимут кругов — вертикальный круг вращение «не видит» (симметрия).
-			const double s45 = 0.7;
-			static const double hAxes[2][3] = 
-			{
-				{ 0.0, s45, s45 },      // наклон в плоскости YZ
-				{ s45, 0.0, s45 }       // наклон в плоскости XZ
-			};
-			//static const double hAxes[2][3] = { {0, 0, 1}, {0, 1, 0} };
-			for (int k = 0; k < 2; ++k)
-			{
-				gp_Ax2 ax(gp_Pnt(0, 0, 0), gp_Dir(hAxes[k][0], hAxes[k][1], hAxes[k][2]));
-				hb.Add(halo, BRepBuilderAPI_MakeEdge(gp_Circ(ax, haloR)).Edge());
-			}
-			Handle(AIS_Shape) haloShape = new AIS_Shape(halo);
-			haloShape->SetDisplayMode(0);
-			haloShape->SetColor(Quantity_Color(1.00, 0.72, 0.20, Quantity_TOC_RGB)); // янтарный
-			if (index >= (int)_crystalHalos->size()) _crystalHalos->resize(index + 1);
-			(*_crystalHalos)[index] = haloShape;
-			
-			// Стартовая позиция обоих объектов — до первого кадра не висят в нуле
-			gp_Trsf trans;
-			trans.SetTranslation(gp_Vec(gp_Pnt(0, 0, 0), center));
-			if (model != nullptr) aisShape->SetLocalTransformation(trans);
-			haloShape->SetLocalTransformation(trans);
-
-			// Оба дисплея отложенные; перерисовка — один раз на весь спавн
-			_aisContext()->Display(haloShape, Standard_False);
-			_aisContext()->Display(aisShape, Standard_False);			
-		}
-
-		void AddSuperCrystalAt(double x, double y, double z, double radius)
-		{
-			gp_Pnt center(x, y, z);
-			Handle(AIS_Shape) aisShape;
-			TopoDS_Shape* model = GetModel(8);
-
-			if (model != nullptr)
-			{
-				aisShape = new AIS_Shape(*model);
-				aisShape->SetColor(Quantity_Color(0.55, 0.15, 0.95, Quantity_TOC_RGB)); // глубокий фиолетовый
-				aisShape->SetTransparency(0.25);
-			}
-			else
-			{
-				// Модель не загрузилась — fallback: крупная сфера того же цвета
-				BRepPrimAPI_MakeSphere big(center, radius * 2.0);
-				aisShape = new AIS_Shape(big.Shape());
-				aisShape->SetColor(Quantity_Color(0.55, 0.15, 0.95, Quantity_TOC_RGB));
-			}
-			aisShape->SetDisplayMode(1);
-
-			// Супер-кристаллы добавляются строго в конец: RemoveSuperCrystalAt
-			// делает erase по индексу, и списки должны оставаться плотными
-			_superCrystals->push_back(aisShape);
-			_superBase->push_back(center);
-
-			if (model != nullptr)
-			{
-				gp_Trsf trans;
-				trans.SetTranslation(gp_Vec(gp_Pnt(0, 0, 0), center));
-				aisShape->SetLocalTransformation(trans);
-			}
-
-			// Standard_False: спавн заменяет сразу три кристалла,
-			// перерисовку делает общий Redraw() игрового кадра
-			_aisContext()->Display(aisShape, Standard_False);
-
-			// Оболочка: полупрозрачная сфера + «клетка» из трёх больших кругов.
-			// Вращать идеально гладкую сферу бессмысленно — геометрия симметрична,
-			// вращение видно только когда есть структура: круги и дают эту структуру.
-			// Всё строится в нуле: позицию подставит трансформация из UpdateCrystalOrientations.
-			const double shellR = radius * 4.0;
-			const double cageR = shellR * 0.9;   // клетка чуть меньше сферы
-
-			const double s45 = 0.7;
-			static const double axes[3][3] = {
-				{ 0.0,  s45, s45 },
-				{ s45,  0.0, s45 },
-				{ 0.0, -s45, s45 }
-			};
-
-			TopoDS_Compound shell;
-			BRep_Builder bb;
-			bb.MakeCompound(shell);
-			bb.Add(shell, BRepPrimAPI_MakeSphere(shellR).Shape());   // сфера ОДНА
-
-			for (int k = 0; k < 3; ++k)
-			{
-				gp_Ax2 ax(gp_Pnt(0, 0, 0), gp_Dir(axes[k][0], axes[k][1], axes[k][2]));
-				bb.Add(shell, BRepBuilderAPI_MakeEdge(gp_Circ(ax, cageR)).Edge());
-			}
-
-			Handle(AIS_Shape) sphereShape = new AIS_Shape(shell);
-			sphereShape->SetDisplayMode(1);
-			sphereShape->SetColor(Quantity_Color(0.55, 0.15, 0.95, Quantity_TOC_RGB));
-			sphereShape->SetTransparency(0.70);   // прозрачнее прежних 0.55
-			
-			// Стартовая позиция: до первого кадра вращения оболочка не должна
-			// висеть в начале координат арены
-			gp_Trsf init;
-			init.SetTranslation(gp_Vec(gp_Pnt(0, 0, 0), center));
-			sphereShape->SetLocalTransformation(init);
-
-			_superSpheres->push_back(sphereShape);
-
-			_aisContext()->Display(sphereShape, Standard_False);
-		}
-
-		//Щит
-		void AddShieldAt(double x, double y, double z, double size)
-		{
-			gp_Pnt center(x, y, z);
-			Handle(AIS_Shape) aisShape;
-			TopoDS_Shape* model = GetModel(9);
-
-			if (model != nullptr)
-			{
-				aisShape = new AIS_Shape(*model);
-				aisShape->SetColor(Quantity_Color(0.10, 0.85, 0.70, Quantity_TOC_RGB)); // бирюзовый
-				aisShape->SetTransparency(0.30);
-			}
-			else
-			{
-				// Модель щита ещё не нарисована/не загрузилась — fallback-сфера
-				BRepPrimAPI_MakeSphere big(center, size * 0.6);
-				aisShape = new AIS_Shape(big.Shape());
-				aisShape->SetColor(Quantity_Color(0.10, 0.85, 0.70, Quantity_TOC_RGB));
-			}
-			aisShape->SetDisplayMode(1);
-
-			_shields->push_back(aisShape);
-			_shieldBase->push_back(center);
-
-			if (model != nullptr)
-			{
-				gp_Trsf trans;
-				trans.SetTranslation(gp_Vec(gp_Pnt(0, 0, 0), center));
-				aisShape->SetLocalTransformation(trans);
-			}
-
-			// Оболочка щита: кокон — сфера + клетка из трёх наклонных кругов,
-			// бирюза как у ореола корабля. Ось (0,0,1) наклонена на 45°,
-			// иначе вращение вокруг up на ней не видно.
-			const double shellR = size * 1.5;
-			const double cageR = shellR * 0.9;
-
-			const double s45 = 0.7;
-			static const double axes[3][3] = {
-				{ 0.0,  s45, s45 },
-				{ s45,  0.0, s45 },
-				{ 0.0, -s45, s45 }
-			};
-
-			TopoDS_Compound shell;
-			BRep_Builder bb;
-			bb.MakeCompound(shell);
-			bb.Add(shell, BRepPrimAPI_MakeSphere(shellR).Shape());
-
-			for (int k = 0; k < 3; ++k)
-			{
-				gp_Ax2 ax(gp_Pnt(0, 0, 0), gp_Dir(axes[k][0], axes[k][1], axes[k][2]));
-				bb.Add(shell, BRepBuilderAPI_MakeEdge(gp_Circ(ax, cageR)).Edge());
-			}
-
-			Handle(AIS_Shape) shellShape = new AIS_Shape(shell);
-			shellShape->SetDisplayMode(1);
-			shellShape->SetColor(Quantity_Color(0.10, 0.85, 0.70, Quantity_TOC_RGB)); // бирюза
-			shellShape->SetTransparency(0.70);
-
-			gp_Trsf init;
-			init.SetTranslation(gp_Vec(gp_Pnt(0, 0, 0), center));
-			shellShape->SetLocalTransformation(init);
-			_aisContext()->Display(shellShape, Standard_False);
-			_shieldShells->push_back(shellShape);
-			_aisContext()->Display(aisShape, Standard_True);
-		}
-
-		// Ореол защиты вокруг корабля: кокон — полупрозрачная сфера и клетка
-		// из трёх наклонных на 45° кругов. Вращение вокруг локальной вертикали
-		// задаёт PlaceShip (кадр × спин), поэтому клетка проворачивается синхронно
-		// с кристаллами на арене.
-		void SetShipShield(bool on, double radius)
-		{
-			if (on == _shipShieldOn) return;
-			_shipShieldOn = on;
-
-			if (!_shipShield().IsNull() && !_aisContext().IsNull())
-				_aisContext()->Erase(_shipShield(), Standard_False);
-			_shipShield() = nullptr;
-
-			if (!on) return;
-
-			const double s45 = 0.7;
-			static const double axes[3][3] = {
-				{ 0.0,  s45, s45 },
-				{ s45,  0.0, s45 },
-				{ 0.0, -s45, s45 }
-			};
-
-			TopoDS_Compound shell;
-			BRep_Builder bb;
-			bb.MakeCompound(shell);
-
-			// Сфера-кокон: та же модель «оболочки», что у супер-кристалла,
-			// но плотнее — прозрачность 0.55 даёт ощущение энергетического поля
-			bb.Add(shell, BRepPrimAPI_MakeSphere(radius).Shape());
-
-			for (int k = 0; k < 3; ++k)
-			{
-				gp_Ax2 ax(gp_Pnt(0, 0, 0), gp_Dir(axes[k][0], axes[k][1], axes[k][2]));
-				bb.Add(shell, BRepBuilderAPI_MakeEdge(gp_Circ(ax, radius * 0.98)).Edge());
-			}
-
-			Handle(AIS_Shape) s = new AIS_Shape(shell);
-			s->SetDisplayMode(1);
-			s->SetColor(Quantity_Color(0.10, 0.85, 0.70, Quantity_TOC_RGB)); // бирюза
-			s->SetTransparency(0.75);   // было бы 0.85 — еле видно; 0.55 = «кокон»
-			_shipShield() = s;
-			_aisContext()->Display(s, Standard_False);
-		}
-
-		void ClearSuperCrystals()
-		{
-			for (auto& s : *_superCrystals)
-				if (!s.IsNull() && !_aisContext().IsNull())
-					_aisContext()->Erase(s, Standard_False);
-			for (auto& sp : *_superSpheres)
-				if (!sp.IsNull() && !_aisContext().IsNull())
-					_aisContext()->Erase(sp, Standard_False);
-			_superCrystals->clear();
-			_superSpheres->clear();
-			_superBase->clear();
-		}
-
-		// Ориентирует все кристаллы 
-		void UpdateCrystalOrientations()
-		{
-			if ((_crystals->empty() && _superCrystals->empty())) return;
-			if (_aisContext().IsNull()) return;
-
-			gp_Dir fwd(_dirX, _dirY, _dirZ);
-			gp_Dir up(_upX, _upY, _upZ);
-
-			gp_Dir right(fwd.Crossed(up));
-			up = gp_Dir(right.Crossed(fwd));
-
-			// вращение вокруг вертикали (up): поворачиваем right и fwd, ось up 
-			// не трогаем
-			//Это формула Родригеса в упрощённом виде для угла вокруг фиксированной оси.
-			//Один общий _spinAngle экономит состояние : не нужно хранить фазу
-			//каждого кристалла.UpdateSpin(dt) инкрементирует угол и заворачивает 
-			//его в 2π — чтобы double не рос бесконечно и не терял точность.
-			double c = cos(_spinAngle), s = sin(_spinAngle);
-			gp_Dir rightR(right.X() * c - fwd.X() * s,
-				right.Y() * c - fwd.Y() * s,
-				right.Z() * c - fwd.Z() * s);
-			gp_Dir fwdR(fwd.X() * c + right.X() * s,
-				fwd.Y() * c + right.Y() * s,
-				fwd.Z() * c + right.Z() * s);
-
-			//// вращение вокруг оси полёта — заметно даже для симметричной модели
-			//double c = cos(_spinAngle), s = sin(_spinAngle);
-			//gp_Dir upR(up.X() * c - right.X() * s,
-			//    up.Y() * c - right.Y() * s,
-			//    up.Z() * c - right.Z() * s);
-			//gp_Dir rightR(right.X() * c + up.X() * s,
-			//    right.Y() * c + up.Y() * s,
-			//    right.Z() * c + up.Z() * s);
-
-			for (size_t i = 0; i < _crystals->size(); ++i)
-			{
-				if ((*_crystals)[i].IsNull()) continue;
-
-				gp_Pnt pos = (*_crystalBase)[i];
-
-				// Спящий кристалл (вне конуса камеры): матрицу не трогаем.
-				// Проснувшись, подхватит текущий _spinAngle — отставание максимум кадр.
-				if (!InView(pos.X(), pos.Y(), pos.Z(), 200.0)) continue;
-
-				//Метод SetValues принимает матрицу по строкам.
-				//Первые три столбца — базис локальной системы координат
-				//(куда смотрят локальные X, Y, Z объекта), 
-				//четвёртый — вектор переноса.Это стандартная компоновка : 
-				//строим ортонормированный базис(right, forward, up) и кладём его
-				//в матрицу.
-				gp_Trsf trsf;
-				trsf.SetValues(
-					rightR.X(), fwdR.X(), up.X(), pos.X(),
-					rightR.Y(), fwdR.Y(), up.Y(), pos.Y(),
-					rightR.Z(), fwdR.Z(), up.Z(), pos.Z());
-
-				(*_crystals)[i]->SetLocalTransformation(trsf);
-				// Ореол: та же матрица, что у кристалла — вращается синхронно
-				if (i < _crystalHalos->size() && !(*_crystalHalos)[i].IsNull())
-					(*_crystalHalos)[i]->SetLocalTransformation(trsf);
-			}
-
-			for (size_t i = 0; i < _superCrystals->size(); ++i)
-			{
-				if ((*_superCrystals)[i].IsNull()) continue;
-
-				gp_Pnt pos = (*_superBase)[i];
-
-				if (!InView(pos.X(), pos.Y(), pos.Z(), 200.0)) continue;
-
-				gp_Trsf trsf;
-				trsf.SetValues(
-					rightR.X(), fwdR.X(), up.X(), pos.X(),
-					rightR.Y(), fwdR.Y(), up.Y(), pos.Y(),
-					rightR.Z(), fwdR.Z(), up.Z(), pos.Z());
-
-				(*_superCrystals)[i]->SetLocalTransformation(trsf);
-			}
-
-			// Оболочки супер-кристаллов: та же матрица, что у кристалла —
-			// клетка вращается синхронно с ним, сфера внутри вращения не заметна
-			// (и не должна: она симметрична), но круги дают эффект живого вращения.
-			for (size_t i = 0; i < _superSpheres->size(); ++i)
-			{
-				if ((*_superSpheres)[i].IsNull()) continue;
-
-				gp_Pnt pos = (*_superBase)[i];
-				if (!InView(pos.X(), pos.Y(), pos.Z(), 200.0)) continue;
-
-				gp_Trsf trsf;
-				trsf.SetValues(
-					rightR.X(), fwdR.X(), up.X(), pos.X(),
-					rightR.Y(), fwdR.Y(), up.Y(), pos.Y(),
-					rightR.Z(), fwdR.Z(), up.Z(), pos.Z());
-
-				(*_superSpheres)[i]->SetLocalTransformation(trsf);
-			}
-
-			// Щит: та же матрица, что и у кристаллов — ориентируется вместе с кораблём
-			for (size_t i = 0; i < _shields->size(); ++i)
-			{
-				if ((*_shields)[i].IsNull()) continue;
-				gp_Pnt pos = (*_shieldBase)[i];
-				if (!InView(pos.X(), pos.Y(), pos.Z(), 200.0)) continue;
-
-				gp_Trsf trsf;
-				trsf.SetValues(
-					rightR.X(), fwdR.X(), up.X(), pos.X(),
-					rightR.Y(), fwdR.Y(), up.Y(), pos.Y(),
-					rightR.Z(), fwdR.Z(), up.Z(), pos.Z());
-				(*_shields)[i]->SetLocalTransformation(trsf);
-
-				if (i < _shieldShells->size() && !(*_shieldShells)[i].IsNull())
-					(*_shieldShells)[i]->SetLocalTransformation(trsf);
-			}
-		}
-
-		void UpdateSpin(double dt)
-		{
-			_spinAngle += dt * SpinSpeed;
-			// держим угол в пределах 2π, чтобы double не рос бесконечно
-			if (_spinAngle > 2.0 * M_PI) _spinAngle -= 2.0 * M_PI;
-		}
-
-		void RemoveCrystalAt(int index)
-		{
-			if (index < 0 || index >= static_cast<int>(_crystals->size())) return;
-			if (!(*_crystals)[index].IsNull() && !_aisContext().IsNull())
-				_aisContext()->Erase((*_crystals)[index], Standard_False);
-			_crystals->erase(_crystals->begin() + index);
-			if (index < (int)_crystalBase->size())
-				_crystalBase->erase(_crystalBase->begin() + index);
-
-			//ореол
-			if (index < (int)_crystalHalos->size() && !(*_crystalHalos)[index].IsNull() && !_aisContext().IsNull())
-				_aisContext()->Erase((*_crystalHalos)[index], Standard_False);
-			if (index < (int)_crystalHalos->size())
-				_crystalHalos->erase(_crystalHalos->begin() + index);
-		}
-
-		void RemoveSuperCrystalAt(int index)
-		{
-			if (index < 0 || index >= static_cast<int>(_superCrystals->size())) return;
-			if (!_aisContext().IsNull())
-			{
-				if (!(*_superCrystals)[index].IsNull())
-					_aisContext()->Erase((*_superCrystals)[index], Standard_False);
-				if (index < (int)_superSpheres->size() && !(*_superSpheres)[index].IsNull())
-					_aisContext()->Erase((*_superSpheres)[index], Standard_False);
-			}
-			_superCrystals->erase(_superCrystals->begin() + index);
-			if (index < (int)_superSpheres->size())
-				_superSpheres->erase(_superSpheres->begin() + index);
-			if (index < (int)_superBase->size())
-				_superBase->erase(_superBase->begin() + index);
-		}
-
-		void RemoveMineAt(int index)
-		{
-			if (index < 0 || index >= static_cast<int>(_mines->size())) return;
-			if (!(*_mines)[index].IsNull() && !_aisContext().IsNull())
-				_aisContext()->Erase((*_mines)[index], Standard_False);
-			_mines->erase(_mines->begin() + index);
-			if (index < (int)_mineBase->size())
-				_mineBase->erase(_mineBase->begin() + index);
-		}
-
-		// Щит снят с арены: пропало время или подобран игроком
-		void RemoveShield()
-		{
-			if (!_aisContext().IsNull())
-			{
-				for (auto& s : *_shields)
-					if (!s.IsNull()) _aisContext()->Erase(s, Standard_False);
-				for (auto& s : *_shieldShells)
-					if (!s.IsNull()) _aisContext()->Erase(s, Standard_False);
-			}
-			_shields->clear();
-			_shieldBase->clear();
-			_shieldShells->clear();
-		}
-
-		//Мины
-		void ClearMines()
-		{
-			for (auto& m : *_mines)
-				if (!m.IsNull() && !_aisContext().IsNull())
-					_aisContext()->Erase(m, Standard_False);
-			_mines->clear();
-			_mineBase->clear();
-		}
-
-		void AddMineAt(int index, double x, double y, double z, double radius)
-		{
-			gp_Pnt center(x, y, z);
-			Handle(AIS_Shape) aisShape;
-			TopoDS_Shape* model = GetModel(4);
-
-			if (model != nullptr)
-			{
-				aisShape = new AIS_Shape(*model);
-				aisShape->SetColor(Quantity_Color(Quantity_NOC_ORANGE));
-			}
-			else
-			{
-				BRepPrimAPI_MakeSphere sphere(center, radius);
-				aisShape = new AIS_Shape(sphere.Shape());
-				aisShape->SetColor(Quantity_Color(Quantity_NOC_RED));
-			}
-			aisShape->SetDisplayMode(1);
-
-			if (index >= (int)_mines->size())    _mines->resize(index + 1);
-			if (index >= (int)_mineBase->size()) _mineBase->resize(index + 1, gp_Pnt(0, 0, 0));
-			(*_mines)[index] = aisShape;
-			(*_mineBase)[index] = center;
-
-			if (model != nullptr)
-			{
-				gp_Trsf trans;
-				trans.SetTranslation(gp_Vec(gp_Pnt(0, 0, 0), center));
-				aisShape->SetLocalTransformation(trans);
-			}
-
-			_aisContext()->Display(aisShape, Standard_True);
-		}
-
 		void AddGridLine(const gp_Pnt& p1, const gp_Pnt& p2, Quantity_NameOfColor baseColor)
 		{
 			BRepBuilderAPI_MakeEdge edge(p1, p2);
@@ -1502,15 +1027,6 @@ namespace Snake3DViewer
 			}
 		}
 
-		// Запоминает геометрию арены для подсветки границы.
-		// Шаг обязан совпадать с тем, что передан в CreateGrid —
-		// иначе ячейки подсветки разъедутся с линиями сетки.
-		void SetHighlightGrid(double arenaSize, double cellSize)
-		{
-			_arenaHalf = arenaSize / 2.0;   // единая формула со стенами и сеткой
-			_cellSize = cellSize;
-		}
-
 		// Показать/спрятать стены (клавиша T). Сам TopoDS_Shape стен
 		// не разрушается — только их видимость в контексте.
 		void SetWallsVisible(bool visible)
@@ -1533,6 +1049,20 @@ namespace Snake3DViewer
 
 			_aisContext()->UpdateCurrentViewer();
 		}
+
+		// ═══════════════════════════════════════════════════════════════
+		// БЛОК 8. ПОДСВЕТКА ГРАНИЦЫ (режим «без стен», клавиша T)
+		// ═══════════════════════════════════════════════════════════════
+		// Запоминает геометрию арены для подсветки границы.
+		// Шаг обязан совпадать с тем, что передан в CreateGrid —
+		// иначе ячейки подсветки разъедутся с линиями сетки.
+		void SetHighlightGrid(double arenaSize, double cellSize)
+		{
+			_arenaHalf = arenaSize / 2.0;   // единая формула со стенами и сеткой
+			_cellSize = cellSize;
+		}
+
+
 
 		// Гасит всю подсветку разом (рестарт, выход из режима)
 		void ClearBoundaryHighlights()
@@ -1675,29 +1205,530 @@ namespace Snake3DViewer
 			return ais;
 		}
 
-		/*bool CheckCollision(const TopoDS_Shape& s1, const TopoDS_Shape& s2)
+		// ═══════════════════════════════════════════════════════════════
+		// БЛОК 9. КРИСТАЛЛЫ
+		// ═══════════════════════════════════════════════════════════════
+		void ClearCrystals()
 		{
-			BRepExtrema_DistShapeShape dist(s1, s2);
-			return dist.Value() <= 0.001;
+			for (auto& c : *_crystals)
+				if (!c.IsNull() && !_aisContext().IsNull())
+					_aisContext()->Erase(c, Standard_False);
+			//ореол
+			for (auto& h : *_crystalHalos)
+				if (!h.IsNull() && !_aisContext().IsNull())
+					_aisContext()->Erase(h, Standard_False);
+			_crystalHalos->clear();
+			_crystals->clear();
 		}
 
-		bool IsHeadColliding()
+		void AddCrystalAt(int index, double x, double y, double z, double radius)
 		{
-			if (_snakeSegments->empty()) return false;
-			TopoDS_Shape headShape = (*_snakeSegments)[0]->Shape();
-			for (const auto& wall : *_walls)
-				if (CheckCollision(headShape, wall->Shape())) return true;
-			for (size_t i = 2; i < _snakeSegments->size(); ++i)
-				if (CheckCollision(headShape, (*_snakeSegments)[i]->Shape())) return true;
-			return false;
-		}*/
+			gp_Pnt center(x, y, z);
+			Handle(AIS_Shape) aisShape;
+			TopoDS_Shape* model = GetModel(2);
 
+			if (model != nullptr)
+			{
+				aisShape = new AIS_Shape(*model);
+				aisShape->SetColor(Quantity_Color(0.40, 0.65, 1.00, Quantity_TOC_RGB)); // светло-синий
+				aisShape->SetTransparency(0.25);
+			}
+			else
+			{
+				BRepPrimAPI_MakeSphere sphere(center, radius);
+				aisShape = new AIS_Shape(sphere.Shape());
+				aisShape->SetColor(Quantity_Color(Quantity_NOC_CYAN));
+			}
+			aisShape->SetDisplayMode(1);
 
-		// Служебные методы отладки: вызываются только из UI-отладки
-		/*void Zoom(int x1, int y1, int x2, int y2)
+			if (index >= (int)_crystals->size())    _crystals->resize(index + 1);
+			if (index >= (int)_crystalBase->size()) _crystalBase->resize(index + 1, gp_Pnt(0, 0, 0));
+			(*_crystals)[index] = aisShape;
+			(*_crystalBase)[index] = center;
+
+			// Малый ореол вокруг кристалла: обозначает «съедобность».
+			// Два круга, радиус чуть меньше высоты кристалла.
+			// позицию и ориентацию каждый кадр задаёт UpdateCrystalOrientations.
+
+			const double haloR = radius * 1.25;
+			TopoDS_Compound halo;
+			BRep_Builder hb;
+			hb.MakeCompound(halo);
+
+			// Оси наклонены на 45° от вертикали: при вращении вокруг up меняется
+			// азимут кругов — вертикальный круг вращение «не видит» (симметрия).
+			const double s45 = 0.7;
+			static const double hAxes[2][3] = 
+			{
+				{ 0.0, s45, s45 },      // наклон в плоскости YZ
+				{ s45, 0.0, s45 }       // наклон в плоскости XZ
+			};
+			//static const double hAxes[2][3] = { {0, 0, 1}, {0, 1, 0} };
+			for (int k = 0; k < 2; ++k)
+			{
+				gp_Ax2 ax(gp_Pnt(0, 0, 0), gp_Dir(hAxes[k][0], hAxes[k][1], hAxes[k][2]));
+				hb.Add(halo, BRepBuilderAPI_MakeEdge(gp_Circ(ax, haloR)).Edge());
+			}
+			Handle(AIS_Shape) haloShape = new AIS_Shape(halo);
+			haloShape->SetDisplayMode(0);
+			haloShape->SetColor(Quantity_Color(1.00, 0.72, 0.20, Quantity_TOC_RGB)); // янтарный
+			if (index >= (int)_crystalHalos->size()) _crystalHalos->resize(index + 1);
+			(*_crystalHalos)[index] = haloShape;
+			
+			// Стартовая позиция обоих объектов — до первого кадра не висят в нуле
+			gp_Trsf trans;
+			trans.SetTranslation(gp_Vec(gp_Pnt(0, 0, 0), center));
+			if (model != nullptr) aisShape->SetLocalTransformation(trans);
+			haloShape->SetLocalTransformation(trans);
+
+			// Оба дисплея отложенные; перерисовка — один раз на весь спавн
+			_aisContext()->Display(haloShape, Standard_False);
+			_aisContext()->Display(aisShape, Standard_False);			
+		}
+
+		void RemoveCrystalAt(int index)
 		{
-			if (!_view().IsNull()) _view()->Zoom(x1, y1, x2, y2);
-		}*/
+			if (index < 0 || index >= static_cast<int>(_crystals->size())) return;
+			if (!(*_crystals)[index].IsNull() && !_aisContext().IsNull())
+				_aisContext()->Erase((*_crystals)[index], Standard_False);
+			_crystals->erase(_crystals->begin() + index);
+			if (index < (int)_crystalBase->size())
+				_crystalBase->erase(_crystalBase->begin() + index);
+
+			//ореол
+			if (index < (int)_crystalHalos->size() && !(*_crystalHalos)[index].IsNull() && !_aisContext().IsNull())
+				_aisContext()->Erase((*_crystalHalos)[index], Standard_False);
+			if (index < (int)_crystalHalos->size())
+				_crystalHalos->erase(_crystalHalos->begin() + index);
+		}
+
+		// Ориентирует все кристаллы 
+		void UpdateCrystalOrientations()
+		{
+			if ((_crystals->empty() && _superCrystals->empty())) return;
+			if (_aisContext().IsNull()) return;
+
+			gp_Dir fwd(_dirX, _dirY, _dirZ);
+			gp_Dir up(_upX, _upY, _upZ);
+
+			gp_Dir right(fwd.Crossed(up));
+			up = gp_Dir(right.Crossed(fwd));
+
+			// вращение вокруг вертикали (up): поворачиваем right и fwd, ось up 
+			// не трогаем
+			//Это формула Родригеса в упрощённом виде для угла вокруг фиксированной оси.
+			//Один общий _spinAngle экономит состояние : не нужно хранить фазу
+			//каждого кристалла.UpdateSpin(dt) инкрементирует угол и заворачивает 
+			//его в 2π — чтобы double не рос бесконечно и не терял точность.
+			double c = cos(_spinAngle), s = sin(_spinAngle);
+			gp_Dir rightR(right.X() * c - fwd.X() * s,
+				right.Y() * c - fwd.Y() * s,
+				right.Z() * c - fwd.Z() * s);
+			gp_Dir fwdR(fwd.X() * c + right.X() * s,
+				fwd.Y() * c + right.Y() * s,
+				fwd.Z() * c + right.Z() * s);
+
+			//// вращение вокруг оси полёта — заметно даже для симметричной модели
+			//double c = cos(_spinAngle), s = sin(_spinAngle);
+			//gp_Dir upR(up.X() * c - right.X() * s,
+			//    up.Y() * c - right.Y() * s,
+			//    up.Z() * c - right.Z() * s);
+			//gp_Dir rightR(right.X() * c + up.X() * s,
+			//    right.Y() * c + up.Y() * s,
+			//    right.Z() * c + up.Z() * s);
+
+			for (size_t i = 0; i < _crystals->size(); ++i)
+			{
+				if ((*_crystals)[i].IsNull()) continue;
+
+				gp_Pnt pos = (*_crystalBase)[i];
+
+				// Спящий кристалл (вне конуса камеры): матрицу не трогаем.
+				// Проснувшись, подхватит текущий _spinAngle — отставание максимум кадр.
+				if (!InView(pos.X(), pos.Y(), pos.Z(), 200.0)) continue;
+
+				//Метод SetValues принимает матрицу по строкам.
+				//Первые три столбца — базис локальной системы координат
+				//(куда смотрят локальные X, Y, Z объекта), 
+				//четвёртый — вектор переноса.Это стандартная компоновка : 
+				//строим ортонормированный базис(right, forward, up) и кладём его
+				//в матрицу.
+				gp_Trsf trsf;
+				trsf.SetValues(
+					rightR.X(), fwdR.X(), up.X(), pos.X(),
+					rightR.Y(), fwdR.Y(), up.Y(), pos.Y(),
+					rightR.Z(), fwdR.Z(), up.Z(), pos.Z());
+
+				(*_crystals)[i]->SetLocalTransformation(trsf);
+				// Ореол: та же матрица, что у кристалла — вращается синхронно
+				if (i < _crystalHalos->size() && !(*_crystalHalos)[i].IsNull())
+					(*_crystalHalos)[i]->SetLocalTransformation(trsf);
+			}
+
+			for (size_t i = 0; i < _superCrystals->size(); ++i)
+			{
+				if ((*_superCrystals)[i].IsNull()) continue;
+
+				gp_Pnt pos = (*_superBase)[i];
+
+				if (!InView(pos.X(), pos.Y(), pos.Z(), 200.0)) continue;
+
+				gp_Trsf trsf;
+				trsf.SetValues(
+					rightR.X(), fwdR.X(), up.X(), pos.X(),
+					rightR.Y(), fwdR.Y(), up.Y(), pos.Y(),
+					rightR.Z(), fwdR.Z(), up.Z(), pos.Z());
+
+				(*_superCrystals)[i]->SetLocalTransformation(trsf);
+			}
+
+			// Оболочки супер-кристаллов: та же матрица, что у кристалла —
+			// клетка вращается синхронно с ним, сфера внутри вращения не заметна
+			// (и не должна: она симметрична), но круги дают эффект живого вращения.
+			for (size_t i = 0; i < _superSpheres->size(); ++i)
+			{
+				if ((*_superSpheres)[i].IsNull()) continue;
+
+				gp_Pnt pos = (*_superBase)[i];
+				if (!InView(pos.X(), pos.Y(), pos.Z(), 200.0)) continue;
+
+				gp_Trsf trsf;
+				trsf.SetValues(
+					rightR.X(), fwdR.X(), up.X(), pos.X(),
+					rightR.Y(), fwdR.Y(), up.Y(), pos.Y(),
+					rightR.Z(), fwdR.Z(), up.Z(), pos.Z());
+
+				(*_superSpheres)[i]->SetLocalTransformation(trsf);
+			}
+
+			// Щит: та же матрица, что и у кристаллов — ориентируется вместе с кораблём
+			for (size_t i = 0; i < _shields->size(); ++i)
+			{
+				if ((*_shields)[i].IsNull()) continue;
+				gp_Pnt pos = (*_shieldBase)[i];
+				if (!InView(pos.X(), pos.Y(), pos.Z(), 200.0)) continue;
+
+				gp_Trsf trsf;
+				trsf.SetValues(
+					rightR.X(), fwdR.X(), up.X(), pos.X(),
+					rightR.Y(), fwdR.Y(), up.Y(), pos.Y(),
+					rightR.Z(), fwdR.Z(), up.Z(), pos.Z());
+				(*_shields)[i]->SetLocalTransformation(trsf);
+
+				if (i < _shieldShells->size() && !(*_shieldShells)[i].IsNull())
+					(*_shieldShells)[i]->SetLocalTransformation(trsf);
+			}
+		}
+
+		void UpdateSpin(double dt)
+		{
+			_spinAngle += dt * SpinSpeed;
+			// держим угол в пределах 2π, чтобы double не рос бесконечно
+			if (_spinAngle > 2.0 * M_PI) _spinAngle -= 2.0 * M_PI;
+		}
+
+		// ═══════════════════════════════════════════════════════════════
+		// БЛОК 10. СУПЕР-КРИСТАЛЛЫ
+		// ═══════════════════════════════════════════════════════════════
+		void AddSuperCrystalAt(double x, double y, double z, double radius)
+		{
+			gp_Pnt center(x, y, z);
+			Handle(AIS_Shape) aisShape;
+			TopoDS_Shape* model = GetModel(8);
+
+			if (model != nullptr)
+			{
+				aisShape = new AIS_Shape(*model);
+				aisShape->SetColor(Quantity_Color(0.55, 0.15, 0.95, Quantity_TOC_RGB)); // глубокий фиолетовый
+				aisShape->SetTransparency(0.25);
+			}
+			else
+			{
+				// Модель не загрузилась — fallback: крупная сфера того же цвета
+				BRepPrimAPI_MakeSphere big(center, radius * 2.0);
+				aisShape = new AIS_Shape(big.Shape());
+				aisShape->SetColor(Quantity_Color(0.55, 0.15, 0.95, Quantity_TOC_RGB));
+			}
+			aisShape->SetDisplayMode(1);
+
+			// Супер-кристаллы добавляются строго в конец: RemoveSuperCrystalAt
+			// делает erase по индексу, и списки должны оставаться плотными
+			_superCrystals->push_back(aisShape);
+			_superBase->push_back(center);
+
+			if (model != nullptr)
+			{
+				gp_Trsf trans;
+				trans.SetTranslation(gp_Vec(gp_Pnt(0, 0, 0), center));
+				aisShape->SetLocalTransformation(trans);
+			}
+
+			// Standard_False: спавн заменяет сразу три кристалла,
+			// перерисовку делает общий Redraw() игрового кадра
+			_aisContext()->Display(aisShape, Standard_False);
+
+			// Оболочка: полупрозрачная сфера + «клетка» из трёх больших кругов.
+			// Вращать идеально гладкую сферу бессмысленно — геометрия симметрична,
+			// вращение видно только когда есть структура: круги и дают эту структуру.
+			// Всё строится в нуле: позицию подставит трансформация из UpdateCrystalOrientations.
+			const double shellR = radius * 4.0;
+			const double cageR = shellR * 0.9;   // клетка чуть меньше сферы
+
+			const double s45 = 0.7;
+			static const double axes[3][3] = {
+				{ 0.0,  s45, s45 },
+				{ s45,  0.0, s45 },
+				{ 0.0, -s45, s45 }
+			};
+
+			TopoDS_Compound shell;
+			BRep_Builder bb;
+			bb.MakeCompound(shell);
+			bb.Add(shell, BRepPrimAPI_MakeSphere(shellR).Shape());   // сфера ОДНА
+
+			for (int k = 0; k < 3; ++k)
+			{
+				gp_Ax2 ax(gp_Pnt(0, 0, 0), gp_Dir(axes[k][0], axes[k][1], axes[k][2]));
+				bb.Add(shell, BRepBuilderAPI_MakeEdge(gp_Circ(ax, cageR)).Edge());
+			}
+
+			Handle(AIS_Shape) sphereShape = new AIS_Shape(shell);
+			sphereShape->SetDisplayMode(1);
+			sphereShape->SetColor(Quantity_Color(0.55, 0.15, 0.95, Quantity_TOC_RGB));
+			sphereShape->SetTransparency(0.70);   // прозрачнее прежних 0.55
+			
+			// Стартовая позиция: до первого кадра вращения оболочка не должна
+			// висеть в начале координат арены
+			gp_Trsf init;
+			init.SetTranslation(gp_Vec(gp_Pnt(0, 0, 0), center));
+			sphereShape->SetLocalTransformation(init);
+
+			_superSpheres->push_back(sphereShape);
+
+			_aisContext()->Display(sphereShape, Standard_False);
+		}
+
+		void RemoveSuperCrystalAt(int index)
+		{
+			if (index < 0 || index >= static_cast<int>(_superCrystals->size())) return;
+			if (!_aisContext().IsNull())
+			{
+				if (!(*_superCrystals)[index].IsNull())
+					_aisContext()->Erase((*_superCrystals)[index], Standard_False);
+				if (index < (int)_superSpheres->size() && !(*_superSpheres)[index].IsNull())
+					_aisContext()->Erase((*_superSpheres)[index], Standard_False);
+			}
+			_superCrystals->erase(_superCrystals->begin() + index);
+			if (index < (int)_superSpheres->size())
+				_superSpheres->erase(_superSpheres->begin() + index);
+			if (index < (int)_superBase->size())
+				_superBase->erase(_superBase->begin() + index);
+		}
+
+		void ClearSuperCrystals()
+		{
+			for (auto& s : *_superCrystals)
+				if (!s.IsNull() && !_aisContext().IsNull())
+					_aisContext()->Erase(s, Standard_False);
+			for (auto& sp : *_superSpheres)
+				if (!sp.IsNull() && !_aisContext().IsNull())
+					_aisContext()->Erase(sp, Standard_False);
+			_superCrystals->clear();
+			_superSpheres->clear();
+			_superBase->clear();
+		}
+
+		// ═══════════════════════════════════════════════════════════════
+		// БЛОК 11. ЩИТЫ: щит на арене + ореол защиты корабля
+		// ═══════════════════════════════════════════════════════════════
+		//Щит
+		void AddShieldAt(double x, double y, double z, double size)
+		{
+			gp_Pnt center(x, y, z);
+			Handle(AIS_Shape) aisShape;
+			TopoDS_Shape* model = GetModel(9);
+
+			if (model != nullptr)
+			{
+				aisShape = new AIS_Shape(*model);
+				aisShape->SetColor(Quantity_Color(0.10, 0.85, 0.70, Quantity_TOC_RGB)); // бирюзовый
+				aisShape->SetTransparency(0.30);
+			}
+			else
+			{
+				// Модель щита ещё не нарисована/не загрузилась — fallback-сфера
+				BRepPrimAPI_MakeSphere big(center, size * 0.6);
+				aisShape = new AIS_Shape(big.Shape());
+				aisShape->SetColor(Quantity_Color(0.10, 0.85, 0.70, Quantity_TOC_RGB));
+			}
+			aisShape->SetDisplayMode(1);
+
+			_shields->push_back(aisShape);
+			_shieldBase->push_back(center);
+
+			if (model != nullptr)
+			{
+				gp_Trsf trans;
+				trans.SetTranslation(gp_Vec(gp_Pnt(0, 0, 0), center));
+				aisShape->SetLocalTransformation(trans);
+			}
+
+			// Оболочка щита: кокон — сфера + клетка из трёх наклонных кругов,
+			// бирюза как у ореола корабля. Ось (0,0,1) наклонена на 45°,
+			// иначе вращение вокруг up на ней не видно.
+			const double shellR = size * 1.5;
+			const double cageR = shellR * 0.9;
+
+			const double s45 = 0.7;
+			static const double axes[3][3] = {
+				{ 0.0,  s45, s45 },
+				{ s45,  0.0, s45 },
+				{ 0.0, -s45, s45 }
+			};
+
+			TopoDS_Compound shell;
+			BRep_Builder bb;
+			bb.MakeCompound(shell);
+			bb.Add(shell, BRepPrimAPI_MakeSphere(shellR).Shape());
+
+			for (int k = 0; k < 3; ++k)
+			{
+				gp_Ax2 ax(gp_Pnt(0, 0, 0), gp_Dir(axes[k][0], axes[k][1], axes[k][2]));
+				bb.Add(shell, BRepBuilderAPI_MakeEdge(gp_Circ(ax, cageR)).Edge());
+			}
+
+			Handle(AIS_Shape) shellShape = new AIS_Shape(shell);
+			shellShape->SetDisplayMode(1);
+			shellShape->SetColor(Quantity_Color(0.10, 0.85, 0.70, Quantity_TOC_RGB)); // бирюза
+			shellShape->SetTransparency(0.70);
+
+			gp_Trsf init;
+			init.SetTranslation(gp_Vec(gp_Pnt(0, 0, 0), center));
+			shellShape->SetLocalTransformation(init);
+			_aisContext()->Display(shellShape, Standard_False);
+			_shieldShells->push_back(shellShape);
+			_aisContext()->Display(aisShape, Standard_True);
+		}
+
+		// Ореол защиты вокруг корабля: кокон — полупрозрачная сфера и клетка
+		// из трёх наклонных на 45° кругов. Вращение вокруг локальной вертикали
+		// задаёт PlaceShip (кадр × спин), поэтому клетка проворачивается синхронно
+		// с кристаллами на арене.
+		void SetShipShield(bool on, double radius)
+		{
+			if (on == _shipShieldOn) return;
+			_shipShieldOn = on;
+
+			if (!_shipShield().IsNull() && !_aisContext().IsNull())
+				_aisContext()->Erase(_shipShield(), Standard_False);
+			_shipShield() = nullptr;
+
+			if (!on) return;
+
+			const double s45 = 0.7;
+			static const double axes[3][3] = {
+				{ 0.0,  s45, s45 },
+				{ s45,  0.0, s45 },
+				{ 0.0, -s45, s45 }
+			};
+
+			TopoDS_Compound shell;
+			BRep_Builder bb;
+			bb.MakeCompound(shell);
+
+			// Сфера-кокон: та же модель «оболочки», что у супер-кристалла,
+			// но плотнее — прозрачность 0.55 даёт ощущение энергетического поля
+			bb.Add(shell, BRepPrimAPI_MakeSphere(radius).Shape());
+
+			for (int k = 0; k < 3; ++k)
+			{
+				gp_Ax2 ax(gp_Pnt(0, 0, 0), gp_Dir(axes[k][0], axes[k][1], axes[k][2]));
+				bb.Add(shell, BRepBuilderAPI_MakeEdge(gp_Circ(ax, radius * 0.98)).Edge());
+			}
+
+			Handle(AIS_Shape) s = new AIS_Shape(shell);
+			s->SetDisplayMode(1);
+			s->SetColor(Quantity_Color(0.10, 0.85, 0.70, Quantity_TOC_RGB)); // бирюза
+			s->SetTransparency(0.75);   // было бы 0.85 — еле видно; 0.55 = «кокон»
+			_shipShield() = s;
+			_aisContext()->Display(s, Standard_False);
+		}
+
+		// Щит снят с арены: пропало время или подобран игроком
+		void RemoveShield()
+		{
+			if (!_aisContext().IsNull())
+			{
+				for (auto& s : *_shields)
+					if (!s.IsNull()) _aisContext()->Erase(s, Standard_False);
+				for (auto& s : *_shieldShells)
+					if (!s.IsNull()) _aisContext()->Erase(s, Standard_False);
+			}
+			_shields->clear();
+			_shieldBase->clear();
+			_shieldShells->clear();
+		}
+
+		// ═══════════════════════════════════════════════════════════════
+		// БЛОК 12. МИНЫ
+		// ═══════════════════════════════════════════════════════════════
+		void RemoveMineAt(int index)
+		{
+			if (index < 0 || index >= static_cast<int>(_mines->size())) return;
+			if (!(*_mines)[index].IsNull() && !_aisContext().IsNull())
+				_aisContext()->Erase((*_mines)[index], Standard_False);
+			_mines->erase(_mines->begin() + index);
+			if (index < (int)_mineBase->size())
+				_mineBase->erase(_mineBase->begin() + index);
+		}
+
+		//Мины
+		void ClearMines()
+		{
+			for (auto& m : *_mines)
+				if (!m.IsNull() && !_aisContext().IsNull())
+					_aisContext()->Erase(m, Standard_False);
+			_mines->clear();
+			_mineBase->clear();
+		}
+
+		void AddMineAt(int index, double x, double y, double z, double radius)
+		{
+			gp_Pnt center(x, y, z);
+			Handle(AIS_Shape) aisShape;
+			TopoDS_Shape* model = GetModel(4);
+
+			if (model != nullptr)
+			{
+				aisShape = new AIS_Shape(*model);
+				aisShape->SetColor(Quantity_Color(Quantity_NOC_ORANGE));
+			}
+			else
+			{
+				BRepPrimAPI_MakeSphere sphere(center, radius);
+				aisShape = new AIS_Shape(sphere.Shape());
+				aisShape->SetColor(Quantity_Color(Quantity_NOC_RED));
+			}
+			aisShape->SetDisplayMode(1);
+
+			if (index >= (int)_mines->size())    _mines->resize(index + 1);
+			if (index >= (int)_mineBase->size()) _mineBase->resize(index + 1, gp_Pnt(0, 0, 0));
+			(*_mines)[index] = aisShape;
+			(*_mineBase)[index] = center;
+
+			if (model != nullptr)
+			{
+				gp_Trsf trans;
+				trans.SetTranslation(gp_Vec(gp_Pnt(0, 0, 0), center));
+				aisShape->SetLocalTransformation(trans);
+			}
+
+			_aisContext()->Display(aisShape, Standard_True);
+		}
+
+		// ═══════════════════════════════════════════════════════════════
+		// БЛОК 13. КАМЕРA: режимы, слежение, ввод, трансформации вью
+		// ═══════════════════════════════════════════════════════════════
 
 		// Колёсный зум: factor > 1 — приблизить, factor < 1 — отдалить.
 		// Работаем напрямую со Scale камеры: старый Zoom(x1,y1,x2,y2)
@@ -1767,21 +1798,7 @@ namespace Snake3DViewer
 				_view()->SetBackgroundColor(Quantity_TOC_RGB, (float)r / 255, (float)g / 255, (float)b / 255);
 		}
 
-		void RemoveAllSnake()
-		{
-			for (auto& seg : *_snakeSegments)
-			{
-				if (seg.IsNull()) continue;   // заглушка корабля — стирать нечего
-				if (!_aisContext().IsNull())
-					_aisContext()->Erase(seg, Standard_False);
-			}
-			_snakeSegments->clear();
-			_basePositions->clear();
-			_positions->clear();
-			_segmentDirs->clear();
-			if (!_aisContext().IsNull())
-				_aisContext()->UpdateCurrentViewer();
-		}
+		
 
 		void SetOrientation(double fx, double fy, double fz,
 			double ux, double uy, double uz)
@@ -1821,13 +1838,12 @@ namespace Snake3DViewer
 
 		bool IsCockpitView() { return _viewMode == 1; }
 
-		//void FollowHead(int headIndex);
-		//void FollowHead(int headIndex, bool snap);  //Перегружаем метод
-		void SnakeSceneProxy::FollowHead(int headIndex)
+		
+		void FollowHead(int headIndex)
 		{
 			FollowHead(headIndex, false);
 		}
-		void SnakeSceneProxy::FollowHead(int headIndex, bool snap)
+		void FollowHead(int headIndex, bool snap)
 		{
 			if (headIndex < 0 || _snakeSegments == nullptr) return;
 			if ((size_t)headIndex >= _snakeSegments->size()) return;
@@ -1900,11 +1916,12 @@ namespace Snake3DViewer
 
 
 			_camEyeX = newEyeX; _camEyeY = newEyeY; _camEyeZ = newEyeZ;
-			_camDirX = _dirX;   _camDirY = _dirY;   _camDirZ = _dirZ;
-
-			//_view()->Redraw();
+			_camDirX = _dirX;   _camDirY = _dirY;   _camDirZ = _dirZ;			
 		}
 
+		// ═══════════════════════════════════════════════════════════════
+		// БЛОК 14. ПРОЕКЦИЯ В ЭКРАН (HUD)
+		// ═══════════════════════════════════════════════════════════════
 		//Скалярное произведение viewDir · toPoint — это проверка «перед камерой или за ней».
 		// Если точка за глазом, проекция математически «вывернута» и её координаты 
 		// бессмысленны — флаг inFront предупреждает об этом.Обратите внимание : 
@@ -1936,8 +1953,44 @@ namespace Snake3DViewer
 			return true;
 		}
 
-		//Методы для сборки корабля
+		bool InView(double px, double py, double pz, double maxDist)
+		{
+			double dx = px - _camEyeX;
+			double dy = py - _camEyeY;;
+			double dz = pz - _camEyeZ;
+			double dist = sqrt(dx * dx + dy * dy + dz * dz);
 
+			if (dist > maxDist) return false;
+			if (dist < 1e-9) return true;
+
+			// cos(70°) ≈ 0.342 — конус с запасом вокруг реального FOV ~60°
+			return (dx * _camDirX + dy * _camDirY + dz * _camDirZ) / dist > 0.342;
+		}
+		
+		// ═══════════════════════════════════════════════════════════════
+		// БЛОК 15. СБОРКА КОРАБЛЯ: кадр, размещение, подгонка, покраска
+		// ═══════════════════════════════════════════════════════════════
+		//Методы для сборки корабля
+		
+		// Кадр (позиция + forward + up) → gp_Trsf. Общий для головы (MoveHead)
+		// и корабля (PlaceShip): локальный X — right, Y — forward, Z — up.
+		gp_Trsf TrsfFromFrame(double x, double y, double z,
+			double fx, double fy, double fz,
+			double ux, double uy, double uz)
+		{
+			gp_Dir fwd(fx, fy, fz);
+			gp_Dir up(ux, uy, uz);
+			gp_Dir right(fwd.Crossed(up));
+			up = gp_Dir(right.Crossed(fwd));
+
+			gp_Trsf trsf;
+			trsf.SetValues(
+				right.X(), fwd.X(), up.X(), x,
+				right.Y(), fwd.Y(), up.Y(), y,
+				right.Z(), fwd.Z(), up.Z(), z);
+			return trsf;
+		}
+		
 		// Разместить корабль целиком: общий кадр головы × подгоночная трансформация части.
 		// Двигатель мерцает синусоидой — как подсветка стен, но по цвету модели.
 		void PlaceShip(double x, double y, double z,
@@ -2057,21 +2110,9 @@ namespace Snake3DViewer
 			return true;
 		}
 
-
-		bool InView(double px, double py, double pz, double maxDist)
-		{
-			double dx = px - _camEyeX;
-			double dy = py - _camEyeY;;
-			double dz = pz - _camEyeZ;
-			double dist = sqrt(dx * dx + dy * dy + dz * dz);
-
-			if (dist > maxDist) return false;
-			if (dist < 1e-9) return true;
-
-			// cos(70°) ≈ 0.342 — конус с запасом вокруг реального FOV ~60°
-			return (dx * _camDirX + dy * _camDirY + dz * _camDirZ) / dist > 0.342;
-		}
-
+		// ═══════════════════════════════════════════════════════════════
+		// БЛОК 16. ОТЛАДКА
+		// ═══════════════════════════════════════════════════════════════
 		//Отладочное
 		property int SuperCount
 		{

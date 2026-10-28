@@ -10,6 +10,7 @@ namespace Snake3D
             Options.CockpitView = OptCockpit.IsChecked == true;
             Options.TapControl = OptTap.IsChecked == true;
             Options.WallsOn = OptWalls.IsChecked == true;
+            Options.Fullscreen = OptFullscreen.IsChecked == true;
             Options.Speed = OptSpeed.Value;
             Options.ArenaSize = OptArena.Value;
             Options.GridStep = OptGrid.Value;
@@ -21,14 +22,17 @@ namespace Snake3D
         // до этого пользователь волен дёргать их как угодно
         public GameOptions Options { get; } = new();
         public bool Resumed { get; private set; }
+        public bool ExitRequested { get; private set; }
+
         private readonly bool _pauseMode;
-        public MenuWindow(bool pauseMode = false)
+        public MenuWindow(bool pauseMode = false, bool fullscreen = false)
         {
             DarkTitle.Apply(this);
             InitializeComponent();
 
-            _pauseMode = pauseMode;           
-            
+            _pauseMode = pauseMode;
+            OptFullscreen.IsChecked = fullscreen;
+
             PreviewKeyDown += (s, e) =>
             {
                 if (e.Key != System.Windows.Input.Key.Escape || e.IsRepeat) return;
@@ -60,9 +64,11 @@ namespace Snake3D
 
         private void BtnExit_Click(object sender, RoutedEventArgs e)
         {
+            // «Выход» в любом меню = закрыть игру. Никакого ветвления больше нет
             Audio.Service.StopMusic();
             Audio.Service.StopFlight();
-            DialogResult = false;   // ShowMenu увидит false и сам закроет главное окно
+            ExitRequested = true;
+            DialogResult = false;
         }
 
         private void BtnContinue_Click(object sender, RoutedEventArgs e)
@@ -114,6 +120,11 @@ namespace Snake3D
         {
             if (SfxVolLabel != null) SfxVolLabel.Text = ((int)e.NewValue).ToString();
             Audio.Service.SetSfxVolume(e.NewValue / 100.0);
+        }
+
+        private void OptFullscreen_Changed(object sender, RoutedEventArgs e)
+        {
+
         }
     }
 }

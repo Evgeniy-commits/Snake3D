@@ -34,14 +34,15 @@ namespace Snake3D
         private SnakeGame? _game;
         private readonly System.Diagnostics.Stopwatch _frameClock = System.Diagnostics.Stopwatch.StartNew();
         private System.TimeSpan _lastElapsed;
-        private DateTime _lastFrameTime;
-        private readonly System.Diagnostics.Stopwatch _uptime = System.Diagnostics.Stopwatch.StartNew();
+        //private DateTime _lastFrameTime;
+        //private readonly System.Diagnostics.Stopwatch _uptime = System.Diagnostics.Stopwatch.StartNew();
         private HudOverlay? _hud;
         private DateTime _lastHudUpdate = DateTime.MinValue;
         private bool _menuHandled = false;
         private bool _finished;
         private bool _runSaved;
         private bool _markersOn = false;
+        private bool _fullscreen;
 
         // Свободная камера: до старта, на паузе, после конца партии
         private bool CameraFree =>
@@ -63,7 +64,7 @@ namespace Snake3D
             InitializeComponent();
             Loaded += SnakeView_Loaded;
             Unloaded += SnakeView_Unloaded;
-            
+            Deactivated += SnakeView_Deactivated;
         }
 
         //Порядок инициализации важен и всегда одинаков:
@@ -119,6 +120,15 @@ namespace Snake3D
             }
         }
 
+        private void SnakeView_Deactivated(object? sender, EventArgs e)
+        {
+            if (_game is { IsRunning: true } && !_game.IsPaused)
+            {
+                _game.TogglePause();
+                StatusText.Text = "Пауза — SPACE чтобы продолжить";
+            }
+        }
+
         // Вся инициализация, зависящая от опций меню. Вызывается через BeginInvoke:
         // к этому моменту окно показано, ShowDialog легален.
         private void ShowMenu()
@@ -130,14 +140,15 @@ namespace Snake3D
                 Audio.Service.StartMenuMusic();
 
                 var menu = new MenuWindow { Owner = this };
-                if (menu.ShowDialog() != true) 
-                {
-                    Audio.Service.StopMenuMusic();
-                    Close(); 
-                    return; 
-                }   // крестик/«Выход»
+                bool? res = menu.ShowDialog();
                 Audio.Service.StopMenuMusic();
+
+                if (menu.ExitRequested) { Close(); return; }   // «Выход» — из игры
+
+                // Esc/крестик в первом меню: строим сцену с настройками по умолчанию
+                // и попадаем в лобби — режим можно сменить позже через Esc
                 var opt = menu.Options;
+                SetFullscreen(opt.Fullscreen);
 
                 // 1. Сетка + единственная подгонка камеры (небо — внутри, после FitScene)
                 _viewport!.InitializeGameScene(opt.ArenaSize, opt.GridStep);
@@ -174,7 +185,7 @@ namespace Snake3D
                         Audio.Service.StopFlight();
                         Audio.Service.StopMusic();          // Stop, не Pause — чтобы следующий старт дал новую музыку
                         Audio.Service.PlaySfx("gameover");
-                        StatusText.Text = "Игра окончена! SPACE — рестарт";
+                        StatusText.Text = "Игра окончена! SPACE — рестарт · Esc — меню";
                     });
 
                 _game.Victory += (s, ev) => Dispatcher.Invoke(() =>
@@ -185,9 +196,9 @@ namespace Snake3D
                     Audio.Service.StopMusic();
                     Audio.Service.PlaySfx("victory");
                     var t = TimeSpan.FromSeconds(_game!.PlayTime);
-                    StatusText.Text = $"Миссия выполнена! Очки: {_game.Score}  Время: {t.Minutes:00}:{t.Seconds:00}  SPACE — заново";
+                    StatusText.Text = $"Миссия выполнена! Очки: {_game.Score}  Время: {t.Minutes:00}:{t.Seconds:00}  SPACE — заново · Esc — меню";
 
-                   _viewport.Proxy!.SetBackgroundColor(5, 5, 10);
+                    _viewport.Proxy!.SetBackgroundColor(5, 5, 10);
                 });
 
                 // 4. Опции ДО Reset: сцена строится сразу с учётом выбора.
@@ -213,7 +224,7 @@ namespace Snake3D
                 PreviewKeyUp += SnakeView_PreviewKeyUp;
 
                 // 7. Единый кадровый цикл
-                _lastFrameTime = DateTime.UtcNow;
+                //_lastFrameTime = DateTime.UtcNow;
                 CompositionTarget.Rendering += OnFrame;
 
                 // 8. HUD-оверлей
@@ -230,6 +241,41 @@ namespace Snake3D
                 MessageBox.Show(ex.ToString(), "Ошибка в меню");
             }
         }
+
+        //// Главное меню после «Выхода»: тот же диалог, что при первом запуске,
+        //// но вьюпорт и игру не пересоздаём — они уже построены.
+        //private void OpenMainMenu()
+        //{
+        //    if (!IsLoaded) return;    // окно уже закрывается — меню не открываем
+
+        //    _game!.Reset();
+        //    SnapCameraAfterReset();
+
+        //    Audio.Service.StartMenuMusic();
+        //    var menu = new MenuWindow(fullscreen: _fullscreen) { Owner = this };   // всегда НОВЫЙ экземпляр
+        //    bool? result = menu.ShowDialog();
+        //    Audio.Service.StopMenuMusic();
+                        
+        //    if (result == true)                              // выбрали режим — готовим партию
+        //    {
+        //        var opt = menu.Options;
+        //        SetFullscreen(opt.Fullscreen);
+        //        _game.ApplyOptions(opt);
+        //        _game.Reset();
+        //        SnapCameraAfterReset();
+        //        _viewport?.Proxy!.SetViewMode(opt.CockpitView ? 1 : 0);
+        //        StatusText.Text = "Space — старт";
+        //    }
+        //    else if (result == false)                        // «Выход» в главном меню — из игры
+        //    {
+        //        Close();
+        //    }
+        //    else                                             // Esc/крестик — остаёмся в лобби
+        //    {
+        //        StatusText.Text = "Esc — меню · Space — старт";
+        //    }
+        //}
+
         private void SaveRun()
         {
             if (_runSaved || _game == null) return;
@@ -245,11 +291,7 @@ namespace Snake3D
                 }
             );
         }
-
-        private void BtnExit_Click(object sender, RoutedEventArgs e)
-        {
-            DialogResult = false;   // ShowMenu увидит false и сам закроет главное окно
-        }
+        
         private void SnakeView_PreviewKeyDown(object sender, KeyEventArgs e)
         {
             if (_game == null) return;
@@ -268,13 +310,9 @@ namespace Snake3D
                     {
                         _finished = false;
                         _runSaved = false;
-                        _game.Reset();
-                        //_game.Start();
-                        //_viewport?.Proxy?.FitScene();
+                        _game.Reset();                        
                         _viewport?.Proxy?.SetBackgroundColor(2, 2, 5);
-                        _viewport?.Proxy!.FollowHead(0, snap: true);
-                        Audio.Service.StartFlight();
-                        Audio.Service.StartMusic();
+                        SnapCameraAfterReset();                        
                         StatusText.Text = "Space - старт";
                     }
                     else if (_game.IsRunning)
@@ -285,6 +323,7 @@ namespace Snake3D
                     else if (!_game.IsRunning)
                     {
                         _game.Start();
+                        Audio.Service.StartMusic();
                         Audio.Service.StartFlight();
                         StatusText.Text = "Идёт игра!";
                     }
@@ -319,8 +358,8 @@ namespace Snake3D
                 case Key.Escape:
                     if (e.IsRepeat) break;
                     if (_game == null) break;
-
-                    bool canMenu = !_game.IsGameOver && !_finished;   // после конца партии меню не нужно
+                    
+                    bool canMenu = true;
 
                     if (canMenu && _game.IsRunning && !_game.IsPaused)
                     {
@@ -332,36 +371,53 @@ namespace Snake3D
                         // игра ещё не стартовала — показываем полное меню (можно выбрать режим),
                         // на паузе — меню паузы (кнопка «Продолжить»)
                         bool paused = _game.IsPaused;
-                        bool notStarted = !_game.IsRunning && !_game.IsGameOver && !_finished;
+                        bool lobbyLike = !_game.IsRunning && !_game.IsPaused;   // лобби: до старта И после конца партии
 
-                        if (notStarted)
-                            Audio.Service.StartMenuMusic();   // до старта — снова тема меню
-                        var menu = new MenuWindow(pauseMode: paused) { Owner = this };
+                        if (lobbyLike)
+                            Audio.Service.StartMenuMusic();   // лобби: тема меню — в т.ч. после проигрыша
+                        var menu = new MenuWindow(pauseMode: paused, fullscreen: _fullscreen) { Owner = this };
                         menu.ShowDialog();
 
-                        if (menu.DialogResult == true && !paused)
+                        Audio.Service.StopMenuMusic();   // меню закрылось — тема уходит в любом случае
+
+                        if (menu.DialogResult == true)
                         {
                             if (menu.Resumed)
                             {
-                                // «Продолжить» до старта: игра уже построена и настроена,
-                                // ничего не пересоздаём — просто возвращаемся
-                                StatusText.Text = "Space — старт";
+                                if (paused)
+                                {
+                                    // «Продолжить» из паузы: снимаем паузу — раньше этого не было
+                                    _game.TogglePause();
+                                    _viewport?.Proxy?.FollowHead(0, snap: true);
+                                    StatusText.Text = "Идёт игра!";
+                                }
+                                else
+                                {
+                                    // «Продолжить» до старта: ничего не пересоздаём
+                                    StatusText.Text = "Space — старт";
+                                }
                             }
                             else
                             {
-                                // выбрали режим прямо из Esc-меню до старта: готовим партию,
-                                // но НЕ запускаем — старт по Space
+                                // выбрали режим (Hunt/Mission) — работает и из паузы, и из лобби:
+                                // применяем опции, готовим партию, но НЕ запускаем — старт по Space
                                 _finished = false;
                                 _game.ApplyOptions(menu.Options);
                                 _game.Reset();
+                                SnapCameraAfterReset();          // ← и здесь тоже: вместо прямого FollowHead
                                 _viewport?.Proxy!.SetViewMode(menu.Options.CockpitView ? 1 : 0);
-                                _viewport?.Proxy?.FollowHead(0, snap: true);
+                                SetFullscreen(menu.Options.Fullscreen);
                                 StatusText.Text = "Space — старт";
                             }
                         }
+                        else if (menu.ExitRequested)              // только явный «Выход»
+                        {
+                            Audio.Service.StopMusic();
+                            Audio.Service.StopFlight();
+                            Close();
+                        }
                         else
                         {
-                            // «Продолжить» на паузе, Esc в меню или крестик — остаёмся на паузе
                             StatusText.Text = paused ? "Пауза — SPACE чтобы продолжить" : "Space — старт";
                         }
                     }
@@ -370,6 +426,13 @@ namespace Snake3D
                     if (e.IsRepeat) break;
                     _markersOn = !_markersOn;
                     StatusText.Text = _markersOn ? "Маркеры: ВКЛ" : "Маркеры: ВЫКЛ";
+                    break;
+                case Key.G:
+                    if (e.IsRepeat) break;
+                    SetFullscreen(!_fullscreen);
+                    StatusText.Text = _fullscreen
+                        ? "Полный экран: ВКЛ — G чтобы выйти"
+                        : "Полный экран: ВЫКЛ";
                     break;
 
             }
@@ -387,7 +450,6 @@ namespace Snake3D
                 case Key.S: case Key.Down: _game.ReleaseTurn(4); break;
             }
         }
-
 
         //Считает реальное время кадра и передаёт его в игру.
         //Внутри Frame идёт разбор на фиксированные логические тики(20 Гц)
@@ -486,6 +548,27 @@ namespace Snake3D
             _hud.UpdateCrystalMarkers(xs, ys);
         }
 
+        //Полноэкранный режим
+        private void SetFullscreen(bool on)
+        {
+            if (_fullscreen == on) return;
+            _fullscreen = on;
+
+            if (on)
+            {
+                WindowStyle = WindowStyle.None;         //1. Убрали рамку
+                ResizeMode = ResizeMode.NoResize;       //2. Не перетаскиваем
+                WindowState = WindowState.Maximized;    //3. Развернули
+            }
+            else
+            {
+                WindowState = WindowState.Normal;
+                WindowStyle = WindowStyle.SingleBorderWindow;
+                ResizeMode = ResizeMode.CanResize;
+            }
+            // HUD переставит себя сам
+        }
+
         //UpdateHudPlacement — геометрическая привязка оверлея:
         //ViewportHost.PointToScreen переводит верхний левый угол хоста
         //в экранные координаты, оверлей(отдельное безрамочное окно)
@@ -566,6 +649,17 @@ namespace Snake3D
             CompositionTarget.Rendering -= OnFrame;
             _hud?.Close();
             _hud = null;
+        }
+
+        // Снап камеры ПОСЛЕ первого кадра: Reset оставляет деталям корабля placement
+        // конца прошлой партии, FollowHead до рендера читает этот «завал».
+        // Background-приоритет выполняется после callbacks рендера текущего кадра —
+        // к этому моменту Frame() уже выставил корабль ровно.
+        private void SnapCameraAfterReset()
+        {
+            Dispatcher.BeginInvoke(new Action(() =>
+                _viewport?.Proxy?.FollowHead(0, snap: true)),
+                DispatcherPriority.Background);
         }
     }
 }
