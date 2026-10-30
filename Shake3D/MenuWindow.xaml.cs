@@ -126,5 +126,17 @@ namespace Snake3D
         {
 
         }
+
+        private void BtnCustomizer_Click(object sender, RoutedEventArgs e)
+        {
+            var win = new CustomizerWindow();
+            if (Owner != null)
+            {
+                win.Width = Owner.ActualWidth > 0 ? Owner.ActualWidth : Owner.Width;
+                win.Height = Owner.ActualHeight > 0 ? Owner.ActualHeight : Owner.Height;
+                win.Owner = Owner;
+            }
+            win.ShowDialog();
+        }
     }
 }

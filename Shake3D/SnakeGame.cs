@@ -111,7 +111,10 @@ namespace Snake3D
         //private const double BaseLogicInterval = 0.05;
         public double SpeedMultiplier { get; set; } = 1.0;
         public double LogicInterval =>
-            _step / (GameConfig.BaseStepsPerSecond * Math.Max(0.25, SpeedMultiplier));
+               _step / (GameConfig.BaseStepsPerSecond *
+                            Math.Max(0.25, SpeedMultiplier * (_boostActive ? GameConfig.Boost.SpeedMultiplier : 1.0)));
+        //public double LogicInterval =>
+        //    _step / (GameConfig.BaseStepsPerSecond * Math.Max(0.25, SpeedMultiplier));
 
         // ── 3.3 Объекты арены: кристаллы и мины ──
         //кристаллы
@@ -154,6 +157,20 @@ namespace Snake3D
         private readonly List<Point3D> _shields = new();
         public IReadOnlyList<Point3D> Shields => _shields;
         public bool ProtectionActive => _protectionActive;
+
+        //--- 3.5.1 ---
+        //Ускорение, повторяет щит
+        private int _crystalsSinceBoost;
+        private bool _boostOnField;
+        private double _boostLifeTimer;    // сколько бусту осталось ждать на арене
+        private bool _boostActive;         // ускорение активно
+        private double _boostTimer;        // сколько ускорения осталось
+
+        private readonly List<Point3D> _boosts = new();
+        public IReadOnlyList<Point3D> Boosts => _boosts;
+        public bool BoostActive => _boostActive;
+        public double BoostRemaining => _boostActive ? _boostTimer : 0.0;
+           
 
         // ── 3.6 Ориентация и повороты ──
         private Vector3D _forward;   // куда летим
@@ -218,6 +235,11 @@ namespace Snake3D
         public event Action? ShieldExpired;   // щит пропал не собранным
         public event Action? ShieldWoreOff;   // защита от мин закончилась
 
+        public event Action? BoostSpawned;
+        public event Action? BoostTaken;
+        public event Action? BoostExpired;   // буст пропал не собранным
+        public event Action? BoostWoreOff;   // ускорение закончилось
+
         // ── 3.10 Замеры производительности ──
         //Для замера производительности
         private readonly System.Diagnostics.Stopwatch _renderWatch = new();
@@ -249,8 +271,10 @@ namespace Snake3D
 
             string modelsDir = @"models\";
 
+            var ship = GameConfig.Ship.Cur;   // выбранный вариант — тот, что задали в кастомайзере
+
             // Загрузка модели головы — один раз, до первого Reset()
-            bool ok = _proxy.LoadHeadModel(System.IO.Path.Combine(modelsDir, "Shatl.stp"), 0.75 * segmentRadius);
+            bool ok = _proxy.LoadHeadModel(ship.Paths[0], 0.75 * segmentRadius);
             if (!ok)
             {
                 // Файл не прочитался — AddSegment сам откатится на fallback-капсулу,
@@ -271,34 +295,38 @@ namespace Snake3D
             // Щит
             bool shieldOk = _proxy.LoadStepModel(GameConfig.Shield.Path, GameConfig.Shield.ModelId, GameConfig.Shield.Size);
 
-            System.Diagnostics.Trace.WriteLine($"Модели: tail={tailOk} crystal={crystalOk} mine={mineOk} shield={shieldOk}");
+            //Ускорение
+            bool boostOk = _proxy.LoadStepModel(GameConfig.Boost.Path, GameConfig.Boost.ModelId, GameConfig.Boost.Size);
+
+            System.Diagnostics.Trace.WriteLine($"Модели: tail={tailOk} crystal={crystalOk} mine={mineOk} shield={shieldOk} boost={boostOk}");
 
             // Корабль: корпус, кабина, двигатель — id 5, 6, 7.
             // Габариты: корпус ≈ длина старой головы (3 × радиус сегмента),
             // кабина и двигатель — доли от неё, коэффициенты в GameConfig.Ship.Scales.
-            bool shipOk = true;
+            bool shipOk = true;            
 
-            if (shipOk)
-                _proxy.CenterShipAssembly(GameConfig.Ship.HullId, GameConfig.Ship.Paths.Length);
-
-            for (int i = 0; i < GameConfig.Ship.Paths.Length; i++)
+            for (int i = 0; i < ship.Paths.Length; i++)
             {
                 int id = GameConfig.Ship.HullId + i;
-                shipOk &= _proxy.LoadShipPart(GameConfig.Ship.Paths[i], id, GameConfig.Ship.Scale);
+                shipOk &= _proxy.LoadShipPart(ship.Paths[i], id, ship.Scale);
                 System.Diagnostics.Trace.WriteLine($"Часть {id}: {shipOk}");
             }
             _shipLoaded = shipOk;
 
-            // Подгонка и покраска — один раз: _fitTrsf переживает ClearScene.
+            // Центрирование сборки — только ПОСЛЕ загрузки всех частей:
+            // метод считает bbox по уже существующим моделям
+            bool centerOk = _proxy.CenterShipAssembly(GameConfig.Ship.HullId, ship.Paths.Length);
+            _shipLoaded = shipOk && centerOk;
+
             if (_shipLoaded)
             {
-                for (int i = 0; i < GameConfig.Ship.Paths.Length; i++)
+                for (int i = 0; i < ship.Paths.Length; i++)
                 {
                     int id = GameConfig.Ship.HullId + i;
-                    var f = GameConfig.Ship.Fit[i];
+                    var f = ship.Fit[i];
                     _proxy.SetPartPlacement(id, f[0], f[1], f[2], f[3], f[4], f[5]);
-                    var c = GameConfig.Ship.Color[i];
-                    _proxy.SetPartColor(id, c[0], c[1], c[2], GameConfig.Ship.Material[i]);
+                    var c = ship.Color[i];
+                    _proxy.SetPartColor(id, c[0], c[1], c[2], ship.Material[i]);
                 }
             }
         }
@@ -395,17 +423,19 @@ namespace Snake3D
             // _shipParts непуста, иначе прокси откатится на старую голову.
             if (_shipLoaded)
             {
-                for (int i = 0; i < GameConfig.Ship.Paths.Length; i++)
+                var ship = GameConfig.Ship.Cur;
+                for (int i = 0; i < ship.Paths.Length; i++)
                 {
                     int id = GameConfig.Ship.HullId + i;
                     _proxy.AddShipPart(id);
-                    var c = GameConfig.Ship.Color[i];
-                    _proxy.SetPartColor(id, c[0], c[1], c[2], GameConfig.Ship.Material[i]);
+                    var c = ship.Color[i];
+                    _proxy.SetPartColor(id, c[0], c[1], c[2], ship.Material[i]);
                 }
             }
 
             _segments.Clear();
 
+            _proxy.SetTailColor(GameConfig.Ship.TailColor[0], GameConfig.Ship.TailColor[1], GameConfig.Ship.TailColor[2]);
             for (int i = 0; i < 5; i++)
             {
                 Point3D p = new Point3D(0, -i * _step, 0);
@@ -454,6 +484,14 @@ namespace Snake3D
             _shieldLifeTimer = 0.0;      // таймеры в ноль вместе с флагами:
             _protectionTimer = 0.0;      // без них значения остаются от прошлой партии
             _proxy.SetShipShield(false, 0.0);
+
+            _boosts.Clear();
+            _boostOnField = false;
+            _crystalsSinceBoost = 0;
+            _boostActive = false;
+            _boostTimer = 0.0;
+            _proxy.RemoveBoost();
+            _proxy.SetShipBoost(false, 0.0);
 
             Score = 0;
             ScoreChanged?.Invoke(this, Score);
@@ -624,6 +662,14 @@ namespace Snake3D
                             SpawnShield();
                     }
 
+                    //пока буст активен, отсчёт не идёт.
+                    if (!_boostActive)
+                    {
+                        _crystalsSinceBoost++;
+                        if (_crystalsSinceBoost >= GameConfig.Boost.TriggerCount)
+                            SpawnBoost();
+                    }
+
                     if (_mode == GameMode.Mission && _crystals.Count == 0 && _superCrystals.Count == 0)
                     {
                         TriggerVictory();
@@ -662,6 +708,13 @@ namespace Snake3D
                             SpawnShield();
                     }
 
+                    if (!_boostActive)
+                    {
+                        _crystalsSinceBoost++;
+                        if (_crystalsSinceBoost >= GameConfig.Boost.TriggerCount)
+                            SpawnBoost();
+                    }
+
                     break;
                 }
             }
@@ -680,6 +733,24 @@ namespace Snake3D
                     _proxy.SetShipShield(true, GameConfig.Shield.ShipHaloRadius);
 
                     ShieldTaken?.Invoke();
+                    break;
+                }
+            }
+
+            for (int i = 0; i < _boosts.Count; i++)
+            {
+                if (Distance(newHead, _boosts[i]) <= _segmentRadius + GameConfig.Boost.FallbackRadius + tolerance)
+                {
+                    _proxy.RemoveBoost();
+                    _boosts.RemoveAt(i);
+                    _boostOnField = false;
+
+                    _boostActive = true;
+                    _boostTimer = GameConfig.Boost.BoostTime;
+                    _crystalsSinceBoost = 0;   // следующий отсчёт — после окончания ускорения
+                    _proxy.SetShipBoost(true, GameConfig.Boost.ShipHaloRadius);
+
+                    BoostTaken?.Invoke();
                     break;
                 }
             }
@@ -827,6 +898,7 @@ namespace Snake3D
 
                 TickSuperCrystals(dt);   // минута супер-кристаллов: тикает пока игра активна
                 TickShield(dt);
+                TickBoost(dt);
             }
 
             _pulsePhase += dt * (2.0 * Math.PI / 0.4);
@@ -1208,6 +1280,19 @@ namespace Snake3D
             ShieldSpawned?.Invoke();
         }
 
+        private void SpawnBoost()
+        {
+            if (_boostOnField || _boostActive) return;   // второй буст не нужен
+
+            Point3D p = FindFreeSpot();
+            _boosts.Add(p);
+            _proxy.AddBoostAt(p.X, p.Y, p.Z, GameConfig.Boost.FallbackRadius);
+            _boostOnField = true;
+            _boostLifeTimer = GameConfig.Boost.LifeTime;
+            _crystalsSinceBoost = 0;
+            BoostSpawned?.Invoke();
+        }
+
         // Таймер окна: выжившие супер-кристаллы возвращаются в пул обычных.
         // Вызывается из Frame — на паузе и после проигрыша минута замирает.
         private void TickSuperCrystals(double dt)
@@ -1251,6 +1336,34 @@ namespace Snake3D
                     _proxy.SetShipShield(false, 0.0);
                     _crystalsSinceShield = 0;   // «счёт по истечении» — с нуля
                     ShieldWoreOff?.Invoke();
+                }
+            }
+        }
+
+        private void TickBoost(double dt)
+        {
+            if (_boostOnField)
+            {
+                _boostLifeTimer -= dt;
+                if (_boostLifeTimer <= 0)
+                {
+                    _proxy.RemoveBoost();
+                    _boosts.Clear();
+                    _boostOnField = false;
+                    _crystalsSinceBoost = 0;   // не взяли — отсчёт заново
+                    BoostExpired?.Invoke();
+                }
+            }
+
+            if (_boostActive)
+            {
+                _boostTimer -= dt;
+                if (_boostTimer <= 0)
+                {
+                    _boostActive = false;
+                    _proxy.SetShipBoost(false, 0.0);
+                    _crystalsSinceBoost = 0;
+                    BoostWoreOff?.Invoke();
                 }
             }
         }

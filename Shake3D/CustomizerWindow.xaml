@@ -1,0 +1,192 @@
+﻿<Window x:Class="Snake3D.CustomizerWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Кастомизация" Background="#0A0A10"
+        WindowStartupLocation="CenterOwner">
+	<Window.Resources>
+		<!-- ─── Палитра темы (позже переедет в Themes/Dark.xaml) ─── -->
+		<SolidColorBrush x:Key="Accent"      Color="#FF8FB0FF"/>
+		<SolidColorBrush x:Key="Panel"       Color="#E0101018"/>
+		<SolidColorBrush x:Key="PanelBorder" Color="#FF2A2A3A"/>
+		<SolidColorBrush x:Key="Field"       Color="#FF17171F"/>
+		<SolidColorBrush x:Key="FieldCombo"  Color="#FF1F1F2A"/>
+		<SolidColorBrush x:Key="TextPrimary"   Color="#FFE9E9F2"/>
+		<SolidColorBrush x:Key="TextSecondary" Color="#FFC0C0D0"/>
+		<SolidColorBrush x:Key="TextMuted"     Color="#FF8A8AA0"/>
+		<SolidColorBrush x:Key="TextHint"      Color="#FF7E8AB0"/>
+
+		<!-- ─── Кнопка в стиле меню ─── -->
+		<Style x:Key="DarkButton" TargetType="Button">
+			<Setter Property="Background" Value="#A01A1E38"/>
+			<Setter Property="Foreground" Value="#E6E9F5"/>
+			<Setter Property="FontSize" Value="14"/>
+			<Setter Property="FontWeight" Value="SemiBold"/>
+			<Setter Property="Height" Value="40"/>
+			<Setter Property="Margin" Value="0,12,0,0"/>
+			<Setter Property="Cursor" Value="Hand"/>
+			<Setter Property="BorderBrush" Value="#5A6B9E"/>
+			<Setter Property="BorderThickness" Value="1"/>
+			<Setter Property="Effect">
+				<Setter.Value>
+					<DropShadowEffect Color="#3A4E8C" BlurRadius="12"
+                                      ShadowDepth="3" Opacity="0.6"/>
+				</Setter.Value>
+			</Setter>
+			<Style.Triggers>
+				<Trigger Property="IsMouseOver" Value="True">
+					<Setter Property="Background" Value="#AA22305A"/>
+					<Setter Property="BorderBrush" Value="{StaticResource Accent}"/>
+					<Setter Property="Foreground" Value="#FFFFFF"/>
+				</Trigger>
+				<Trigger Property="IsPressed" Value="True">
+					<Setter Property="Background" Value="#FF1B2140"/>
+					<Setter Property="Foreground" Value="{StaticResource Accent}"/>
+				</Trigger>
+			</Style.Triggers>
+		</Style>
+
+		<!-- ─── Подписи ─── -->
+		<Style x:Key="Label" TargetType="TextBlock">
+			<Setter Property="Foreground" Value="{StaticResource TextSecondary}"/>
+			<Setter Property="Margin" Value="0,12,0,4"/>
+		</Style>
+
+		<!-- ─── Список деталей ─── -->
+		<Style x:Key="DarkList" TargetType="ListBox">
+			<Setter Property="Background" Value="{StaticResource Field}"/>
+			<Setter Property="Foreground" Value="{StaticResource TextPrimary}"/>
+			<Setter Property="BorderBrush" Value="{StaticResource PanelBorder}"/>
+			<Setter Property="BorderThickness" Value="1"/>
+			<Setter Property="FontSize" Value="14"/>
+		</Style>
+
+		<!-- Выделение пункта в тон темы, вместо системной синевы -->
+		<Style x:Key="DarkListItem" TargetType="ListBoxItem">
+			<Setter Property="Foreground" Value="{StaticResource TextPrimary}"/>
+			<Setter Property="Padding" Value="8,6,8,6"/>
+			<Style.Triggers>
+				<Trigger Property="IsSelected" Value="True">
+					<Setter Property="Background" Value="#AA22305A"/>
+					<Setter Property="Foreground" Value="#FFFFFF"/>
+				</Trigger>
+				<Trigger Property="IsMouseOver" Value="True">
+					<Setter Property="Background" Value="#5522305A"/>
+				</Trigger>
+			</Style.Triggers>
+		</Style>
+
+		<!-- ─── Выпадающий список кораблей (полный шаблон) ─── -->
+		<Style x:Key="DarkComboItem" TargetType="ComboBoxItem">
+			<Setter Property="Foreground" Value="{StaticResource TextPrimary}"/>
+			<Setter Property="Padding" Value="10,6,10,6"/>
+			<Setter Property="Template">
+				<Setter.Value>
+					<ControlTemplate TargetType="ComboBoxItem">
+						<Border x:Name="Bd" Background="Transparent"
+                        BorderBrush="{StaticResource PanelBorder}"
+                        BorderThickness="0,0,0,1">
+							<ContentPresenter Margin="{TemplateBinding Padding}"/>
+						</Border>
+						<ControlTemplate.Triggers>
+							<Trigger Property="IsHighlighted" Value="True">
+								<Setter TargetName="Bd" Property="Background" Value="#AA22305A"/>
+								<Setter Property="Foreground" Value="#FFFFFF"/>
+							</Trigger>
+						</ControlTemplate.Triggers>
+					</ControlTemplate>
+				</Setter.Value>
+			</Setter>
+		</Style>
+
+		<Style x:Key="DarkCombo" TargetType="ComboBox">
+			<Setter Property="Foreground" Value="{StaticResource TextPrimary}"/>
+			<Setter Property="Height" Value="30"/>
+			<Setter Property="Margin" Value="0,0,0,10"/>
+			<Setter Property="FontSize" Value="14"/>
+			<Setter Property="ItemContainerStyle" Value="{StaticResource DarkComboItem}"/>
+			<Setter Property="Template">
+				<Setter.Value>
+					<ControlTemplate TargetType="ComboBox">
+						<Grid>
+							<ToggleButton x:Name="ToggleButton" Focusable="False"
+                                  IsChecked="{Binding IsDropDownOpen, Mode=TwoWay, RelativeSource={RelativeSource TemplatedParent}}"
+                                  ClickMode="Press">
+								<ToggleButton.Template>
+									<ControlTemplate TargetType="ToggleButton">
+										<Border x:Name="Bd" Background="{StaticResource Field}"
+                                        BorderBrush="#FF5A6B9E" BorderThickness="1"
+                                        CornerRadius="4">
+											<Path x:Name="Arrow" HorizontalAlignment="Right"
+                                          Margin="0,0,10,0" VerticalAlignment="Center"
+                                          Data="M 0 0 L 4 4 L 8 0 Z"
+                                          Fill="{StaticResource Accent}"/>
+										</Border>
+										<ControlTemplate.Triggers>
+											<Trigger Property="IsMouseOver" Value="True">
+												<Setter TargetName="Bd" Property="BorderBrush"
+                                                Value="{StaticResource Accent}"/>
+											</Trigger>
+										</ControlTemplate.Triggers>
+									</ControlTemplate>
+								</ToggleButton.Template>
+							</ToggleButton>
+
+							<!-- Текст выбранного пункта — поверх кнопки -->
+							<ContentPresenter x:Name="Selected" Content="{TemplateBinding SelectionBoxItem}"
+                                      ContentTemplate="{TemplateBinding SelectionBoxItemTemplate}"
+                                      Margin="10,0,24,0" VerticalAlignment="Center"
+                                      IsHitTestVisible="False"/>
+
+							<Popup x:Name="PART_Popup" IsOpen="{TemplateBinding IsDropDownOpen}"
+                           Placement="Bottom" AllowsTransparency="True" Focusable="False"
+                           PopupAnimation="Slide">
+								<Border Background="{StaticResource Field}"
+                                BorderBrush="{StaticResource Accent}"
+                                BorderThickness="1" CornerRadius="4"
+                                MinWidth="{TemplateBinding ActualWidth}" Margin="0,2,0,0">
+									<ScrollViewer MaxHeight="180" VerticalScrollBarVisibility="Auto">
+										<ItemsPresenter/>
+									</ScrollViewer>
+								</Border>
+							</Popup>
+						</Grid>
+					</ControlTemplate>
+				</Setter.Value>
+			</Setter>
+		</Style>
+	</Window.Resources>
+
+	<Grid>
+		<Grid.ColumnDefinitions>
+			<ColumnDefinition Width="*"/>
+			<ColumnDefinition Width="300"/>
+		</Grid.ColumnDefinitions>
+
+		<WindowsFormsHost x:Name="Host" Grid.Column="0"/>
+
+		<Border Grid.Column="1" Background="{StaticResource Panel}"
+                BorderBrush="{StaticResource PanelBorder}" BorderThickness="1,0,0,0">
+			<StackPanel Margin="20">
+				<TextBlock Text="Кастомизация" FontSize="28" FontWeight="Bold"
+                           Foreground="{StaticResource TextPrimary}"/>
+				<TextBlock Text="Ремонтный ангар: покрась корабль"
+                           Foreground="{StaticResource TextMuted}" Margin="0,4,0,20"/>
+
+				<TextBlock Text="Корабль" Style="{StaticResource Label}"/>
+				<ComboBox x:Name="ShipList" Style="{StaticResource DarkCombo}"/>
+
+				<TextBlock Text="Элемент" Style="{StaticResource Label}" Margin="0,0,0,6"/>
+				<ListBox x:Name="PartsList" Height="150"
+                         Style="{StaticResource DarkList}"
+                         ItemContainerStyle="{StaticResource DarkListItem}"
+                         SelectionChanged="PartsList_SelectionChanged"/>
+
+				<TextBlock Text="Палитра" Style="{StaticResource Label}" Margin="0,18,0,6"/>
+				<UniformGrid x:Name="PaletteGrid" Columns="4" Margin="0,0,0,20"/>
+
+				<Button Content="Закрыть  (Esc)"
+                        Style="{StaticResource DarkButton}" Click="BtnClose_Click"/>
+			</StackPanel>
+		</Border>
+	</Grid>
+</Window>

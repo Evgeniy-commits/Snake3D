@@ -14,17 +14,10 @@
 		<ApplicationIcon>image\Crystal_Hunter.ico</ApplicationIcon>
 	</PropertyGroup>	
 	
-	<!-- <ItemGroup> -->
-	  <!-- <None Include="..\Snake3D.Viewer\bin\$(Configuration)\Snake3D.Viewer.dll" -->
-			<!-- CopyToOutputDirectory="PreserveNewest" -->
-			<!-- CopyToPublishDirectory="PreserveNewest" -->
-			<!-- Link="Snake3D.Viewer.dll" /> -->
-	<!-- </ItemGroup> -->
-	
 	<ItemGroup>
 		<ProjectReference Include="..\Snake3D.Viewer\Snake3D.Viewer.vcxproj" />
-	</ItemGroup>
-
+	</ItemGroup>	
+	
 	<ItemGroup>
 		<ApplicationDefinition Remove="App.xaml" />
 		<None Remove="audio\music\PPK_-_Perezagruzka_Robots_Outro_79454629.mp3" />
@@ -47,21 +40,58 @@
 		<None Remove="audio\sfx\shieldSpawn.wav" />
 		<None Remove="audio\sfx\shieldUp.mp3" />
 		<None Remove="audio\sfx\victory.mp3" />
+		<None Remove="image\hangar.jpg" />
+		<None Remove="image\hangar.png" />
+		<None Remove="image\hangari.jpg" />
+		<None Remove="image\hangarj.jpg" />
 		<None Remove="image\Logo.jpg" />
 		<None Remove="image\Logo.png" />
 		<None Remove="image\Shatl.jpg" />
 		<None Remove="image\space-shuttle.jpg" />
+		<None Remove="models\Boost.stp" />
 		<None Remove="models\Cockpit.stp" />
 		<None Remove="models\Crystall.stp" />
 		<None Remove="models\Engine.stp" />
 		<None Remove="models\Mine.stp" />
 		<None Remove="models\Shatl.stp" />
 		<None Remove="models\Shield.stp" />
+		<None Remove="models\Shuttle_0\Cockpit_0.stp" />
+		<None Remove="models\Shuttle_0\Engine_0.stp" />
+		<None Remove="models\Shuttle_0\Shuttle_0.stp" />
+		<None Remove="models\Shuttle_1\Cockpit_1.stp" />
+		<None Remove="models\Shuttle_1\Engine_1.stp" />
+		<None Remove="models\Shuttle_1\Shuttle_1.stl" />
+		<None Remove="models\Shuttle_1\Shuttle_1.stp" />
 		<None Remove="models\Tail.stp" />
 		<Page Include="App.xaml" />
 	</ItemGroup>
 
 	<ItemGroup>
+	  <Content Include="image\hangar.jpg">
+	    <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+	  </Content>
+	  <Content Include="image\hangarj.jpg" />
+	  <Content Include="models\Shuttle_0\Cockpit_0.stp">
+	    <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+	  </Content>
+	  <Content Include="models\Shuttle_0\Engine_0.stp">
+	    <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+	  </Content>
+	  <Content Include="models\Shuttle_0\Shuttle_0.stp">
+	    <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+	  </Content>
+	  <Content Include="models\Shuttle_1\Cockpit_1.stp">
+	    <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+	  </Content>
+	  <Content Include="models\Shuttle_1\Engine_1.stp">
+	    <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+	  </Content>
+	  <Content Include="models\Shuttle_1\Shuttle_1.stl">
+	    <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+	  </Content>
+	  <Content Include="models\Shuttle_1\Shuttle_1.stp">
+	    <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+	  </Content>
 	  <Resource Include="image\Logo.jpg" />
 	  <Resource Include="image\Logo.png" />
 	  <Resource Include="image\Shatl.jpg" />
@@ -129,19 +159,16 @@
 	  <Content Include="audio\sfx\victory.mp3">
 	    <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
 	  </Content>
-	  <Content Include="models\Cockpit.stp">
+	  <Content Include="image\hangar.png">
+	    <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+	  </Content>
+	  <Content Include="models\Boost.stp">
 	    <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
 	  </Content>
 	  <Content Include="models\Crystall.stp">
 	    <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
 	  </Content>
-	  <Content Include="models\Engine.stp">
-	    <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-	  </Content>
 	  <Content Include="models\Mine.stp">
-	    <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-	  </Content>
-	  <Content Include="models\Shatl.stp">
 	    <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
 	  </Content>
 	  <Content Include="models\Shield.stp">
@@ -154,23 +181,7 @@
 	<ItemGroup>
 		<None Include="native\**\*.dll" CopyToOutputDirectory="PreserveNewest" Link="%(Filename)%(Extension)" />
 	</ItemGroup>
+	<ItemGroup>
+	  <Content Include="image\hangari.jpg" />
+	</ItemGroup>
 </Project>
-
-
-<!--<Project Sdk="Microsoft.NET.Sdk">
-
-  <PropertyGroup>
-    <OutputType>WinExe</OutputType>
-    <TargetFramework>net9.0-windows</TargetFramework>
-    <Nullable>enable</Nullable>
-    <ImplicitUsings>enable</ImplicitUsings>
-    <UseWPF>true</UseWPF>
-	<UseWindowsForms>true</UseWindowsForms>
-    <Platforms>AnyCPU;x64</Platforms>
-  </PropertyGroup>
-
-  <ItemGroup>
-    <ProjectReference Include="..\Snake3D.Viewer\Snake3D.Viewer.vcxproj" />
-  </ItemGroup>
-
-</Project>-->

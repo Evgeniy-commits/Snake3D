@@ -167,6 +167,11 @@ namespace Snake3D
                 _game.ShieldExpired += () => Audio.Service.PlaySfx("shieldDown");
                 _game.ShieldWoreOff += () => Audio.Service.PlaySfx("shieldOff");
 
+                _game.BoostSpawned += () => Audio.Service.PlaySfx("shieldSpawn");
+                _game.BoostTaken += () => Audio.Service.PlaySfx("shieldUp");
+                _game.BoostExpired += () => Audio.Service.PlaySfx("shieldDown");
+                _game.BoostWoreOff += () => Audio.Service.PlaySfx("shieldOff");
+
                 // 3. События логики приходят из кадрового цикла — в UI-поток через Dispatcher
                 _game.ScoreChanged += (s, score) =>
                     Dispatcher.Invoke(() =>
@@ -241,40 +246,6 @@ namespace Snake3D
                 MessageBox.Show(ex.ToString(), "Ошибка в меню");
             }
         }
-
-        //// Главное меню после «Выхода»: тот же диалог, что при первом запуске,
-        //// но вьюпорт и игру не пересоздаём — они уже построены.
-        //private void OpenMainMenu()
-        //{
-        //    if (!IsLoaded) return;    // окно уже закрывается — меню не открываем
-
-        //    _game!.Reset();
-        //    SnapCameraAfterReset();
-
-        //    Audio.Service.StartMenuMusic();
-        //    var menu = new MenuWindow(fullscreen: _fullscreen) { Owner = this };   // всегда НОВЫЙ экземпляр
-        //    bool? result = menu.ShowDialog();
-        //    Audio.Service.StopMenuMusic();
-                        
-        //    if (result == true)                              // выбрали режим — готовим партию
-        //    {
-        //        var opt = menu.Options;
-        //        SetFullscreen(opt.Fullscreen);
-        //        _game.ApplyOptions(opt);
-        //        _game.Reset();
-        //        SnapCameraAfterReset();
-        //        _viewport?.Proxy!.SetViewMode(opt.CockpitView ? 1 : 0);
-        //        StatusText.Text = "Space — старт";
-        //    }
-        //    else if (result == false)                        // «Выход» в главном меню — из игры
-        //    {
-        //        Close();
-        //    }
-        //    else                                             // Esc/крестик — остаёмся в лобби
-        //    {
-        //        StatusText.Text = "Esc — меню · Space — старт";
-        //    }
-        //}
 
         private void SaveRun()
         {
@@ -493,7 +464,10 @@ namespace Snake3D
             _onFrameSum += _onFrameWatch.Elapsed.TotalMilliseconds;
             if (++_onFrameCount >= 60)
             {
-                System.Diagnostics.Trace.WriteLine($"OnFrame всего: {_onFrameSum / _onFrameCount:F2} мс");
+                System.Diagnostics.Trace.WriteLine(
+                    $"OnFrame: {_onFrameSum / _onFrameCount:F2} мс | " +
+                    $"треугольников/кристалл: {_viewport?.Proxy?.CrystalTriangleCount ?? -1} | " +
+                    $"объектов на сцене: {_viewport?.Proxy?.InteractiveObjectCount ?? -1}");
                 _onFrameSum = 0;
                 _onFrameCount = 0;
             }

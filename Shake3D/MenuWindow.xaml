@@ -58,6 +58,8 @@
 				Style="{StaticResource MenuButton}" Click="BtnHunt_Click"/>
 		<Button x:Name="BtnMission" Content="Миссия" 
 				Style="{StaticResource MenuButton}" Click="BtnMission_Click"/>
+		<Button x:Name="BtnCustomizer" Content="Кастомизация" 
+				Style="{StaticResource MenuButton}" Click="BtnCustomizer_Click"/>
 
 		<!-- «Опции» — обычная кнопка: по клику открывает Popup под собой -->
 		<Button x:Name="BtnOptions" Content="Опции"

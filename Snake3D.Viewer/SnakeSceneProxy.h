@@ -85,6 +85,14 @@
 #include <msclr/marshal.h>
 #include <msclr/marshal_cppstd.h>
 
+//Полигональность
+#include <TopExp_Explorer.hxx>      // TopExp_Explorer
+#include <TopoDS.hxx>               // TopoDS::Face  ← то, чего не хватило сейчас
+#include <TopoDS_Face.hxx>          // тип TopoDS_Face
+#include <TopAbs_ShapeEnum.hxx>     // TopAbs_FACE
+#include <BRep_Tool.hxx>            // BRep_Tool::Triangulation
+#include <Poly_Triangulation.hxx>   // Handle(Poly_Triangulation), NbTriangles
+
 #pragma comment(lib, "TKernel.lib")
 #pragma comment(lib, "TKMath.lib")
 #pragma comment(lib, "TKBRep.lib")
@@ -162,6 +170,8 @@ namespace Snake3DViewer
 		NCollection_DataMap<int, gp_Trsf>* _fitTrsf;
 		NCollection_Haft<Handle(AIS_Shape)> _enginePart;
 		double _engineGlowR = 0.30, _engineGlowG = 0.55, _engineGlowB = 1.0;
+		// ── цвет хвоста: дефолт = прежний зелёный ──
+		double _tailR = 0.45, _tailG = 0.95, _tailB = 0.45;
 
 		// ── 2.6 Кристаллы (обычные) ──
 		std::vector<Handle(AIS_Shape)>* _crystals;
@@ -183,6 +193,14 @@ namespace Snake3DViewer
 		// Ореол корабля при активной защите: каркас из кругов, ставится кадром PlaceShip.
 		NCollection_Haft<Handle(AIS_Shape)> _shipShield;
 		bool _shipShieldOn = false;
+
+		// ── 2.8.1 Ускорение ──
+		std::vector<Handle(AIS_Shape)>* _boosts;
+		std::vector<gp_Pnt>* _boostBase;
+		std::vector<Handle(AIS_Shape)>* _boostShells;
+		NCollection_Haft<Handle(AIS_Shape)> _shipBoost;
+		bool _shipBoostOn = false;
+		double _boostGlowR = 0.95, _boostGlowG = 0.30, _boostGlowB = 1.0;
 
 		// ── 2.9 Мины ──
 		std::vector<Handle(AIS_Shape)>* _mines;
@@ -243,6 +261,11 @@ namespace Snake3DViewer
 			_crystalHalos = new std::vector<Handle(AIS_Shape)>();
 			_shipShield() = NULL;
 
+			_boosts = new std::vector<Handle(AIS_Shape)>();
+			_boostBase = new std::vector<gp_Pnt>();
+			_boostShells = new std::vector<Handle(AIS_Shape)>();
+			_shipBoost() = NULL;
+
 			_dirX = 0.0;  _dirY = 1.0;  _dirZ = 0.0;
 			_upX = 0.0;   _upY = 0.0;   _upZ = 1.0;
 
@@ -290,6 +313,10 @@ namespace Snake3DViewer
 			delete _shieldShells;   _shieldShells = nullptr;
 			delete _crystalHalos;   _crystalHalos = nullptr;
 
+			delete _boosts;			_boosts = nullptr;
+			delete _boostBase;		_boostBase = nullptr;
+			delete _boostShells;	_boostShells = nullptr;			
+
 			for (auto* m : *_models) delete m;
 			delete _models;        _models = nullptr;
 			delete _crystalBase;   _crystalBase = nullptr;
@@ -322,6 +349,10 @@ namespace Snake3DViewer
 			delete _shieldShells;   _shieldShells = nullptr;
 			delete _crystalHalos;   _crystalHalos = nullptr;
 
+			delete _boosts;			_boosts = nullptr;
+			delete _boostBase;		_boostBase = nullptr;
+			delete _boostShells;	_boostShells = nullptr;
+
 			for (auto* m : *_models) delete m;
 			delete _models;        _models = nullptr;
 			delete _crystalBase;   _crystalBase = nullptr;
@@ -350,7 +381,7 @@ namespace Snake3DViewer
 		//арены.
 		bool LoadStepModel(System::String^ path, int kind, double targetSize)
 		{
-			if (kind < 0 || kind > 9) return false;
+			if (kind < 0 || kind > 10) return false;
 
 			msclr::interop::marshal_context ctx;
 			std::string nativePath = ctx.marshal_as<std::string>(path);
@@ -628,8 +659,10 @@ namespace Snake3DViewer
 			ClearMines();
 			ClearSuperCrystals();
 			RemoveShield();
-
+			RemoveBoost();
 			SetShipShield(false, 0.0);
+			SetShipBoost(false, 0.0);
+
 			for (auto& h : *_crystalHalos)
 				if (!h.IsNull() && !_aisContext().IsNull())
 					_aisContext()->Erase(h, Standard_False);
@@ -725,8 +758,8 @@ namespace Snake3DViewer
 				if (tailModel != nullptr)
 				{
 					aisShape = new AIS_Shape(*tailModel);
-					aisShape->SetColor(Quantity_Color(0.45, 0.95, 0.45, Quantity_TOC_RGB));
-					aisShape->SetTransparency(0.25);
+					aisShape->SetColor(Quantity_Color(_tailR, _tailG, _tailB, Quantity_TOC_RGB));
+					aisShape->SetTransparency(0.0);
 					basePos = gp_Pnt(0, 0, 0);
 
 					// как у кристалла: сразу ставим в нужную точку
@@ -739,8 +772,8 @@ namespace Snake3DViewer
 					// Фолбэк — синяя сфера (обязателен: aisShape не должен остаться пустым)
 					BRepPrimAPI_MakeSphere sphere(center, radius);
 					aisShape = new AIS_Shape(sphere.Shape());
-					aisShape->SetColor(Quantity_Color(0.45, 0.95, 0.45, Quantity_TOC_RGB));
-					aisShape->SetTransparency(0.25);
+					aisShape->SetColor(Quantity_Color(_tailR, _tailG, _tailB, Quantity_TOC_RGB));
+					aisShape->SetTransparency(0.0);
 				}
 			}
 
@@ -875,7 +908,7 @@ namespace Snake3DViewer
 			Handle(AIS_Shape) aisShape = new AIS_Shape(w);
 			aisShape->SetDisplayMode(1);
 			aisShape->SetColor(Quantity_Color(0.18, 0.18, 0.22, Quantity_TOC_RGB));
-			aisShape->SetTransparency(0.75);
+			aisShape->SetTransparency(0.9);
 
 			// Скрыть граничные линии рёбер: по умолчанию AIS рисует контуры
 			// граней серыми линиями — на светлом фоне они пробиваются.
@@ -1005,7 +1038,7 @@ namespace Snake3DViewer
 
 			double half = arenaSize / 2.0;
 
-			for (double s = -half; s <= half + 0.001; s += step)
+			for (double s = -half; s <= half + 0.01; s += step)
 			{
 				// Z = ±half
 				AddArenaLine(gp_Pnt(s, -half, -half), gp_Pnt(s, half, -half));
@@ -1231,7 +1264,7 @@ namespace Snake3DViewer
 			{
 				aisShape = new AIS_Shape(*model);
 				aisShape->SetColor(Quantity_Color(0.40, 0.65, 1.00, Quantity_TOC_RGB)); // светло-синий
-				aisShape->SetTransparency(0.25);
+				aisShape->SetTransparency(0.0);
 			}
 			else
 			{
@@ -1418,6 +1451,24 @@ namespace Snake3DViewer
 				if (i < _shieldShells->size() && !(*_shieldShells)[i].IsNull())
 					(*_shieldShells)[i]->SetLocalTransformation(trsf);
 			}
+
+			//Ускорение
+			for (size_t i = 0; i < _boosts->size(); ++i)
+			{
+				if ((*_boosts)[i].IsNull()) continue;
+				gp_Pnt pos = (*_boostBase)[i];
+				if (!InView(pos.X(), pos.Y(), pos.Z(), 200.0)) continue;
+
+				gp_Trsf trsf;
+				trsf.SetValues(
+					rightR.X(), fwdR.X(), up.X(), pos.X(),
+					rightR.Y(), fwdR.Y(), up.Y(), pos.Y(),
+					rightR.Z(), fwdR.Z(), up.Z(), pos.Z());
+				(*_boosts)[i]->SetLocalTransformation(trsf);
+
+				if (i < _boostShells->size() && !(*_boostShells)[i].IsNull())
+					(*_boostShells)[i]->SetLocalTransformation(trsf);
+			}
 		}
 
 		void UpdateSpin(double dt)
@@ -1440,7 +1491,7 @@ namespace Snake3DViewer
 			{
 				aisShape = new AIS_Shape(*model);
 				aisShape->SetColor(Quantity_Color(0.55, 0.15, 0.95, Quantity_TOC_RGB)); // глубокий фиолетовый
-				aisShape->SetTransparency(0.25);
+				aisShape->SetTransparency(0.0);
 			}
 			else
 			{
@@ -1667,6 +1718,127 @@ namespace Snake3DViewer
 			_shields->clear();
 			_shieldBase->clear();
 			_shieldShells->clear();
+		}
+
+		// ═══════════════════════════════════════════════════════════════
+		// БЛОК 11.1 Ускорение: ускорение на арене + ореол ускорения корабля
+		// ═══════════════════════════════════════════════════════════════
+		void AddBoostAt(double x, double y, double z, double size)
+		{
+			gp_Pnt center(x, y, z);
+			Handle(AIS_Shape) aisShape;
+			TopoDS_Shape* model = GetModel(10);
+
+			if (model != nullptr)
+			{
+				aisShape = new AIS_Shape(*model);
+				aisShape->SetColor(Quantity_Color(0.80, 1.00, 0.15, Quantity_TOC_RGB));
+				aisShape->SetTransparency(0.0);
+			}
+			else
+			{
+				BRepPrimAPI_MakeSphere big(center, size * 0.6);
+				aisShape = new AIS_Shape(big.Shape());
+				aisShape->SetColor(Quantity_Color(0.80, 1.00, 0.15, Quantity_TOC_RGB));
+			}
+			aisShape->SetDisplayMode(1);
+
+			_boosts->push_back(aisShape);
+			_boostBase->push_back(center);
+
+			if (model != nullptr)
+			{
+				gp_Trsf trans;
+				trans.SetTranslation(gp_Vec(gp_Pnt(0, 0, 0), center));
+				aisShape->SetLocalTransformation(trans);
+			}
+
+			// Оболочка буста: сфера + клетка из трёх наклонных кругов — читается
+			// как «заряженная» капсула, а не как обычный кристалл
+			const double shellR = size * 1.5;
+			const double cageR = shellR * 0.9;
+
+			const double s45 = 0.7;
+			static const double axes[3][3] = {
+				{ 0.0,  s45, s45 },
+				{ s45,  0.0, s45 },
+				{ 0.0, -s45, s45 }
+			};
+
+			TopoDS_Compound shell;
+			BRep_Builder bb;
+			bb.MakeCompound(shell);
+			bb.Add(shell, BRepPrimAPI_MakeSphere(shellR).Shape());
+
+			for (int k = 0; k < 3; ++k)
+			{
+				gp_Ax2 ax(gp_Pnt(0, 0, 0), gp_Dir(axes[k][0], axes[k][1], axes[k][2]));
+				bb.Add(shell, BRepBuilderAPI_MakeEdge(gp_Circ(ax, cageR)).Edge());
+			}
+
+			Handle(AIS_Shape) shellShape = new AIS_Shape(shell);
+			shellShape->SetDisplayMode(1);
+			shellShape->SetColor(Quantity_Color(0.80, 1.00, 0.15, Quantity_TOC_RGB));
+			shellShape->SetTransparency(0.55);
+
+			gp_Trsf init;
+			init.SetTranslation(gp_Vec(gp_Pnt(0, 0, 0), center));
+			shellShape->SetLocalTransformation(init);
+			_boostShells->push_back(shellShape);
+
+			_aisContext()->Display(shellShape, Standard_False);
+			_aisContext()->Display(aisShape, Standard_True);
+		}
+
+		void SetShipBoost(bool on, double radius)
+		{
+			if (on == _shipBoostOn) return;
+			_shipBoostOn = on;
+
+			if (!_shipBoost().IsNull() && !_aisContext().IsNull())
+				_aisContext()->Erase(_shipBoost(), Standard_False);
+			_shipBoost() = nullptr;
+
+			if (!on) return;
+
+			const double s45 = 0.7;
+			static const double axes[3][3] = {
+				{ 0.0,  s45, s45 },
+				{ s45,  0.0, s45 },
+				{ 0.0, -s45, s45 }
+			};
+
+			TopoDS_Compound shell;
+			BRep_Builder bb;
+			bb.MakeCompound(shell);
+			bb.Add(shell, BRepPrimAPI_MakeSphere(radius).Shape());
+
+			for (int k = 0; k < 3; ++k)
+			{
+				gp_Ax2 ax(gp_Pnt(0, 0, 0), gp_Dir(axes[k][0], axes[k][1], axes[k][2]));
+				bb.Add(shell, BRepBuilderAPI_MakeEdge(gp_Circ(ax, radius * 0.98)).Edge());
+			}
+
+			Handle(AIS_Shape) s = new AIS_Shape(shell);
+			s->SetDisplayMode(1);
+			s->SetColor(Quantity_Color(0.80, 1.00, 0.15, Quantity_TOC_RGB));
+			s->SetTransparency(0.75);
+			_shipBoost() = s;
+			_aisContext()->Display(s, Standard_False);
+		}
+
+		void RemoveBoost()
+		{
+			if (!_aisContext().IsNull())
+			{
+				for (auto& b : *_boosts)
+					if (!b.IsNull()) _aisContext()->Erase(b, Standard_False);
+				for (auto& b : *_boostShells)
+					if (!b.IsNull()) _aisContext()->Erase(b, Standard_False);
+			}
+			_boosts->clear();
+			_boostBase->clear();
+			_boostShells->clear();
 		}
 
 		// ═══════════════════════════════════════════════════════════════
@@ -2038,6 +2210,13 @@ namespace Snake3DViewer
 				spin.SetRotation(gp_Ax1(gp_Pnt(0, 0, 0), gp_Dir(0, 0, 1)), _spinAngle);
 				_shipShield()->SetLocalTransformation(head.Multiplied(spin));
 			}
+
+			if (_shipBoostOn && !_shipBoost().IsNull())
+			{
+				gp_Trsf spin;
+				spin.SetRotation(gp_Ax1(gp_Pnt(0, 0, 0), gp_Dir(0, 0, 1)), _spinAngle);
+				_shipBoost()->SetLocalTransformation(head.Multiplied(spin));
+			}
 		}
 
 		// Создать часть корабля из уже загруженной модели и поставить на сцену.
@@ -2111,6 +2290,72 @@ namespace Snake3DViewer
 		}
 
 		// ═══════════════════════════════════════════════════════════════
+		// БЛОК 15.1 Разработка космопорт - предпросмотр
+		// ═══════════════════════════════════════════════════════════════
+		// Цвет хвоста по умолчанию для будущих AddSegment
+		void SetTailColor(double r, double g, double b)
+		{
+			_tailR = r; _tailG = g; _tailB = b;
+		}
+
+		// Перекрасить уже стоящий на сцене сегмент (Космопорт)
+		void SetSegmentColor(int index, double r, double g, double b)
+		{
+			if (index < 0 || index >= (int)_snakeSegments->size()) return;
+			if ((*_snakeSegments)[index].IsNull()) return;
+			(*_snakeSegments)[index]->SetColor(Quantity_Color(r, g, b, Quantity_TOC_RGB));
+		}
+
+		// Картинка мастерской фоном сцены
+		void SetBackgroundImage(System::String^ path)
+		{
+			if (_view().IsNull()) return;
+			msclr::interop::marshal_context ctx;
+			std::string nativePath = ctx.marshal_as<std::string>(path);
+
+			// Сигнатура: (Standard_CString FileName, Aspect_FillMethod FillStyle, Standard_Boolean ToUpdate)
+			_view()->SetBackgroundImage(nativePath.c_str(), Aspect_FM_STRETCH, Standard_True);
+		}
+
+		// Поставить камеру на дистанцию distFactor * габарит сборки от центра,
+		// повернуть ракурс на 45 градусов по часовой и сдвинуть корабль чуть левее
+		void FitShipClose(double distFactor, double shiftLeft)
+		{
+			if (_view().IsNull() || _shipParts->IsEmpty()) return;
+
+			Bnd_Box box;
+			for (NCollection_DataMap<int, Handle(AIS_Shape)>::Iterator it(*_shipParts); it.More(); it.Next())
+				if (!it.Value().IsNull())
+					BRepBndLib::Add(it.Value()->Shape(), box);
+
+			if (box.IsVoid()) return;
+			Standard_Real xmin, ymin, zmin, xmax, ymax, zmax;
+			box.Get(xmin, ymin, zmin, xmax, ymax, zmax);
+			Standard_Real size = (std::max)(xmax - xmin, (std::max)(ymax - ymin, zmax - zmin));
+
+			gp_Pnt center((xmin + xmax) / 2, (ymin + ymax) / 2, (zmin + zmax) / 2);
+
+			gp_Dir dir(0, 1, 0.45);
+			gp_Trsf rot;
+			rot.SetRotation(gp_Ax1(gp_Pnt(0, 0, 0), gp_Dir(0, 0, 1)), -M_PI / 4.0);
+			dir.Transform(rot);
+
+			// «Право» экрана: вектор взгляда × вертикаль
+			gp_Vec right = gp_Vec(dir).Crossed(gp_Vec(0, 0, 1));
+			right.Normalize();
+
+			// Сдвигаем и точку прицела, и камеру на одну и ту же величину —
+			// корабль уходит влево, оставаясь на той же дистанции
+			gp_Vec shift = right * (size * shiftLeft);
+			gp_Pnt at = center.XYZ() + shift.XYZ();
+			gp_Pnt eye = center.XYZ() + dir.XYZ() * (size * distFactor) + shift.XYZ();
+
+			_view()->SetEye(eye.X(), eye.Y(), eye.Z());
+			_view()->SetAt(at.X(), at.Y(), at.Z());
+			_view()->Invalidate();
+		}
+
+		// ═══════════════════════════════════════════════════════════════
 		// БЛОК 16. ОТЛАДКА
 		// ═══════════════════════════════════════════════════════════════
 		//Отладочное
@@ -2120,6 +2365,35 @@ namespace Snake3DViewer
 			{
 				if (_superCrystals == nullptr) return 0;
 				return (int)_superCrystals->size();
+			}
+		}
+
+		property int CrystalTriangleCount
+		{
+			int get()
+			{
+				TopoDS_Shape* m = GetModel(2);
+				if (m == nullptr) return 0;
+
+				int total = 0;
+				for (TopExp_Explorer ex(*m, TopAbs_FACE); ex.More(); ex.Next())
+				{
+					TopLoc_Location loc;
+					const Handle(Poly_Triangulation)& tri =
+						BRep_Tool::Triangulation(TopoDS::Face(ex.Current()), loc);
+					if (!tri.IsNull()) total += tri->NbTriangles();
+				}
+				return total;   // треугольников в ОДНОМ кристалле
+			}
+		}
+		property int InteractiveObjectCount
+		{
+			int get()
+			{
+				if (_aisContext().IsNull()) return 0;
+				AIS_ListOfInteractive lst;
+				_aisContext()->DisplayedObjects(lst);
+				return (int)lst.Size();
 			}
 		}
 	};
