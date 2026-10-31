@@ -3,7 +3,7 @@ Microsoft Visual Studio Solution File, Format Version 12.00
 # Visual Studio Version 17
 VisualStudioVersion = 17.14.37614.0 d17.14
 MinimumVisualStudioVersion = 10.0.40219.1
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Snake3D", "Shake3D\Snake3D.csproj", "{E2CD6E42-ADB9-4FC4-B40B-A085A5576228}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Snake3D", "Snake3D\Snake3D.csproj", "{E2CD6E42-ADB9-4FC4-B40B-A085A5576228}"
 EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "Snake3D.Viewer", "Snake3D.Viewer\Snake3D.Viewer.vcxproj", "{8FE8B9BE-E2AB-55C7-ECB9-8EEC60DE5A01}"
 EndProject

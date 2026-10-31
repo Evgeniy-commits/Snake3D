@@ -135,7 +135,7 @@ namespace Snake3D
         {
             try
             {
-                if (!IsLoaded) return;   // окно закрыли раньше, чем открылось меню
+                if (!IsLoaded || _viewport?.Proxy == null) return;   // окно/вьюпорт не дожили до меню    
 
                 Audio.Service.StartMenuMusic();
 
@@ -147,14 +147,20 @@ namespace Snake3D
 
                 // Esc/крестик в первом меню: строим сцену с настройками по умолчанию
                 // и попадаем в лобби — режим можно сменить позже через Esc
-                var opt = menu.Options;
+                var opt = menu.Options;                
+
+                // страховка: крестик/Esc отдают опции без CollectOptions —
+                // если GameOptions не предзаполнен из хранилища, тут могут быть нули
+                double arena = double.IsFinite(opt.ArenaSize) && opt.ArenaSize >= 60 ? opt.ArenaSize : 120.0;
+                double grid = double.IsFinite(opt.GridStep) && opt.GridStep >= 1.0 ? opt.GridStep : 2.5;
+
                 SetFullscreen(opt.Fullscreen);
 
                 // 1. Сетка + единственная подгонка камеры (небо — внутри, после FitScene)
-                _viewport!.InitializeGameScene(opt.ArenaSize, opt.GridStep);
+                _viewport!.InitializeGameScene(arena, grid);
 
                 // 2. Логика игры: модели STEP грузятся один раз в конструкторе
-                _game = new SnakeGame(_viewport.Proxy!, opt.ArenaSize, opt.GridStep,
+                _game = new SnakeGame(_viewport.Proxy!, arena, grid,
                                       GameConfig.SegmentRadius, GameConfig.FoodRadius);
 
                 _game.CrystalEaten += () => Audio.Service.PlaySfx("crystal1");

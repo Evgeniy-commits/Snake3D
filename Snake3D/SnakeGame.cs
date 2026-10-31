@@ -262,9 +262,8 @@ namespace Snake3D
                                             double segmentRadius, double foodRadius)
         {
             _proxy = proxy;
-            _arenaSize = arenaSize;
-            _cellSize = gridStep;
-            //_step = gridStep;
+            _arenaSize = double.IsFinite(arenaSize) && arenaSize >= 60 ? arenaSize : 120.0;
+            _cellSize = double.IsFinite(gridStep) && gridStep >= 1.0 ? gridStep : 2.5;
             _segmentRadius = segmentRadius;
             _foodRadius = foodRadius;
             _segments = new List<Point3D>();
@@ -373,6 +372,9 @@ namespace Snake3D
         // «спавнить, а потом прятать» не нужно нигде.
         public void ApplyOptions(GameOptions o)
         {
+            System.Diagnostics.Trace.WriteLine(
+                        $"[Options] арена={o.ArenaSize} сетка={o.GridStep} скорость={o.Speed} " +
+                        $"кристаллы={o.CrystalCount} мины={o.MinesCount} стены={o.WallsOn} режим={o.Mode}");
             _mode = o.Mode;
             TapTurnEnabled = o.TapControl;
             SpeedMultiplier = o.Speed;

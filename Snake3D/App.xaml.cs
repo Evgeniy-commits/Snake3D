@@ -1,12 +1,8 @@
-﻿using Snake3D;
-using System.Configuration;
-using System.Data;
-using System.Windows;
-using Application = System.Windows.Application;
+﻿using System.Windows;
 using MessageBox = System.Windows.MessageBox;
+using Application = System.Windows.Application;
 
-
-namespace Shake3D
+namespace Snake3D
 {
     public partial class App : Application
     {
@@ -23,6 +19,7 @@ namespace Shake3D
                 MessageBox.Show(ex.ToString(), "Ошибка запуска");
                 Shutdown();
             }
+            SettingsStore.Load();          // настройки до первого окна
         }
     }
 
