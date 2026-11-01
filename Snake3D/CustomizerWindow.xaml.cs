@@ -334,7 +334,7 @@ namespace Snake3D
                 ship.Color[_selectedPart][1] = g;
                 ship.Color[_selectedPart][2] = b;
             }
-            SettingsStore.Save();
+            //SettingsStore.Save();
         }
 
         private void BtnClose_Click(object sender, RoutedEventArgs e) => Close();

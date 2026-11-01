@@ -58,8 +58,15 @@ namespace Snake3D
         private double _onFrameSum;
         private int _onFrameCount;
 
+        private static int _instances;
+
         public SnakeView()
         {
+            _instances++;
+            System.Diagnostics.Trace.WriteLine($"[SnakeView] создан экземпляр #{_instances} " +
+                $"поток={Environment.CurrentManagedThreadId}\n" +
+                new System.Diagnostics.StackTrace().ToString());   // ← стектрейс покажет КТО создал
+
             DarkTitle.Apply(this);
             InitializeComponent();
             Loaded += SnakeView_Loaded;

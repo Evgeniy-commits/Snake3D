@@ -1,5 +1,4 @@
-﻿using Microsoft.VisualBasic.Devices;
-using System.Windows;
+﻿using System.Windows;
 using System.ComponentModel;
 
 namespace Snake3D
@@ -21,15 +20,19 @@ namespace Snake3D
 
         // Опции читаются из контролов только в момент «Начать» —
         // до этого пользователь волен дёргать их как угодно
-        public GameOptions Options { get; } = new();
+        public GameOptions Options { get; private set; } = new();
         public bool Resumed { get; private set; }
         public bool ExitRequested { get; private set; }
 
         private readonly bool _pauseMode;
         private bool _allowClose;
+        private static int _instances;
 
         public MenuWindow(bool pauseMode = false, bool fullscreen = false)
-        {            
+        {
+            _instances++;
+            System.Diagnostics.Trace.WriteLine($"[MenuWindow] создан экземпляр #{_instances} " +
+                $"pause={pauseMode}\n{new System.Diagnostics.StackTrace()}");
             DarkTitle.Apply(this);
             InitializeComponent();
 
@@ -53,7 +56,7 @@ namespace Snake3D
             LoadOptionsToUi();
 
             _pauseMode = pauseMode;
-            OptFullscreen.IsChecked = fullscreen;
+            OptFullscreen.IsChecked = fullscreen || SettingsStore.Current.Options.Fullscreen;
 
             PreviewKeyDown += (s, e) =>
             {
@@ -65,44 +68,39 @@ namespace Snake3D
 
             OptSpeed.ValueChanged += (s, e) =>
             {
-                SpeedLabel.Text = $"{OptSpeed.Value:0} x множитель";
-                PushOptionsToStore();
-                SettingsStore.Save();
+                SpeedLabel.Text = $"{OptSpeed.Value:0} x множитель";               
             };
 
             OptArena.ValueChanged += (s, e) =>
             {
-                ArenaLabel.Text = $"{OptArena.Value:0} в стороне";
-                PushOptionsToStore();
-                SettingsStore.Save();
+                ArenaLabel.Text = $"{OptArena.Value:0} в стороне";                
             };
 
             OptGrid.ValueChanged += (s, e) =>
             {
-                GridLabel.Text = $"клетка {OptGrid.Value:0.0}";
-                PushOptionsToStore();
-                SettingsStore.Save();
+                GridLabel.Text = $"клетка {OptGrid.Value:0.0}";               
             };
 
             OptCrystals.ValueChanged += (s, e) =>
             {
-                CrystalLabel.Text = $"{OptCrystals.Value:0} кристаллов на поле";
-                PushOptionsToStore();
-                SettingsStore.Save();
+                CrystalLabel.Text = $"{OptCrystals.Value:0} кристаллов на поле";                
             };
 
             OptMines.ValueChanged += (s, e) =>
             {
                 MineLabel.Text = OptMines.Value < 1
                     ? "без мин"
-                    : $"{OptMines.Value:0} мин на поле";
-                PushOptionsToStore();
-                SettingsStore.Save();
+                    : $"{OptMines.Value:0} мин на поле";               
             };
 
             BtnContinue.Visibility = pauseMode ? Visibility.Visible : Visibility.Collapsed;
 
-            Closed += (s, e) => { PushOptionsToStore(); SettingsStore.Save(); };
+            Closed += (s, e) =>
+            {
+                CollectOptions();        // крестик тоже отдаёт игре то, что на экране
+                PushOptionsToStore();
+                SettingsStore.Save();
+            };
         }
         private void LoadOptionsToUi()
         {
@@ -198,34 +196,23 @@ namespace Snake3D
             if (OptMusic == null || OptSfx == null) return;
 
             Audio.Service.SetMusicEnabled(OptMusic.IsChecked == true);
-            Audio.Service.SetSfxEnabled(OptSfx.IsChecked == true);
-            PushOptionsToStore();
-            SettingsStore.Save();
+            Audio.Service.SetSfxEnabled(OptSfx.IsChecked == true);           
         }
 
         private void OptMusicVol_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
         {
             if (MusicVolLabel != null) MusicVolLabel.Text = ((int)e.NewValue).ToString();
-            if (OptGrid == null) return;
-            Audio.Service.SetMusicVolume(e.NewValue / 100.0);
-            PushOptionsToStore();
-            SettingsStore.Save();
+            Audio.Service.SetMusicVolume(e.NewValue / 100.0);            
         }
 
         private void OptSfxVol_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
         {
-            if (SfxVolLabel != null) SfxVolLabel.Text = ((int)e.NewValue).ToString();
-            if (OptGrid == null) return;
-            Audio.Service.SetSfxVolume(e.NewValue / 100.0);
-            PushOptionsToStore();
-            SettingsStore.Save();
+            if (SfxVolLabel != null) SfxVolLabel.Text = ((int)e.NewValue).ToString();            
+            Audio.Service.SetSfxVolume(e.NewValue / 100.0);            
         }
 
         private void OptFullscreen_Changed(object sender, RoutedEventArgs e)
-        {
-            PushOptionsToStore();
-            SettingsStore.Save();
-        }
+        {}
 
         private void BtnCustomizer_Click(object sender, RoutedEventArgs e)
         {

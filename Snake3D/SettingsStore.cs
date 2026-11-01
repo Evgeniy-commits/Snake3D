@@ -17,45 +17,94 @@ namespace Snake3D
         private static string FilePath => Path.Combine(StoreDir, "settings.json");
 
         public static AppSettings Current { get; private set; } = new();
+
         private static readonly JsonSerializerOptions JsonOpts = new()
         {
+            PropertyNameCaseInsensitive = true,   // Speed == speed == SPEED
             WriteIndented = true
         };
 
         //При старте - до создания окон
+        //public static void Load()
+        //{
+        //    Trace.WriteLine($"[Settings] Load: {FilePath}, файл есть: {File.Exists(FilePath)}");
+        //    try
+        //    {
+        //        if (File.Exists(FilePath))
+        //        {
+        //            Current = JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(FilePath)) ?? new AppSettings();
+        //        }
+        //    }
+        //    catch (Exception ex)
+        //    {
+        //        // битый файл — начинаем с дефолтов, приложение не падает
+        //        Trace.WriteLine($"settings.json не читается: {ex.Message}");
+        //        Current = new AppSettings();
+        //    }
+        //    ApplyToConfig();
+        //}
+
+        //// Перезаписать файл текущим состоянием
+        //public static void Save()
+        //{
+        //    Trace.WriteLine($"[Settings] Save: {FilePath}");
+        //    try
+        //    {
+        //        Directory.CreateDirectory(StoreDir);
+        //        CaptureFromConfig();
+        //        File.WriteAllText(FilePath, JsonSerializer.Serialize(Current, JsonOpts));
+        //    }
+        //    catch (Exception ex)
+        //    {
+        //        Trace.WriteLine($"settings.json не записался: {ex.Message}");
+        //    }
+        //}
+
         public static void Load()
         {
             Trace.WriteLine($"[Settings] Load: {FilePath}, файл есть: {File.Exists(FilePath)}");
             try
             {
-                if (File.Exists(FilePath))
+                if (!File.Exists(FilePath))
                 {
-                    Current = JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(FilePath)) ?? new AppSettings();
+                    Save();   // первый запуск: запишем файл с CaptureFromConfig
+                    return;
                 }
+
+                var loaded = JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(FilePath), JsonOpts);
+                if (loaded?.Options == null)
+                {
+                    Trace.WriteLine("[Settings] в файле нет Options — остались дефолты");
+                    return;
+                }
+
+                Current = loaded;   // целиком: Options + SelectedShip + TailColor + Ships
+                ApplyToConfig();    // ← вот это было потеряно
+                Trace.WriteLine($"[Settings] прочитано: арена={Current.Options.Arena} " +
+                    $"скорость={Current.Options.Speed} кристаллы={Current.Options.Crystals} " +
+                    $"мины={Current.Options.Mines} кораблей={Current.Ships.Count}");
             }
             catch (Exception ex)
             {
-                // битый файл — начинаем с дефолтов, приложение не падает
-                Trace.WriteLine($"settings.json не читается: {ex.Message}");
+                Trace.WriteLine($"[Settings] ОШИБКА ЧТЕНИЯ: {ex.Message}");
                 Current = new AppSettings();
+                ApplyToConfig();
             }
-            ApplyToConfig();
         }
 
-        // Перезаписать файл текущим состоянием
         public static void Save()
         {
-            Trace.WriteLine($"[Settings] Save: {FilePath}");
             try
             {
-                Directory.CreateDirectory(StoreDir);
-                CaptureFromConfig();
+                Directory.CreateDirectory(StoreDir);    // вернул — без него WriteAllText падает на чистой машине
+                CaptureFromConfig();                    // ← вот это было потеряно
                 File.WriteAllText(FilePath, JsonSerializer.Serialize(Current, JsonOpts));
             }
             catch (Exception ex)
             {
-                Trace.WriteLine($"settings.json не записался: {ex.Message}");
+                Trace.WriteLine($"[Settings] не записался: {ex.Message}");
             }
+            Trace.WriteLine($"[Settings] Save: {FilePath}");
         }
 
         //конфиг -> хранилище (перед записью)
