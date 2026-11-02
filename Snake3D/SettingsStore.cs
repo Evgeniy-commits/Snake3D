@@ -24,42 +24,6 @@ namespace Snake3D
             WriteIndented = true
         };
 
-        //При старте - до создания окон
-        //public static void Load()
-        //{
-        //    Trace.WriteLine($"[Settings] Load: {FilePath}, файл есть: {File.Exists(FilePath)}");
-        //    try
-        //    {
-        //        if (File.Exists(FilePath))
-        //        {
-        //            Current = JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(FilePath)) ?? new AppSettings();
-        //        }
-        //    }
-        //    catch (Exception ex)
-        //    {
-        //        // битый файл — начинаем с дефолтов, приложение не падает
-        //        Trace.WriteLine($"settings.json не читается: {ex.Message}");
-        //        Current = new AppSettings();
-        //    }
-        //    ApplyToConfig();
-        //}
-
-        //// Перезаписать файл текущим состоянием
-        //public static void Save()
-        //{
-        //    Trace.WriteLine($"[Settings] Save: {FilePath}");
-        //    try
-        //    {
-        //        Directory.CreateDirectory(StoreDir);
-        //        CaptureFromConfig();
-        //        File.WriteAllText(FilePath, JsonSerializer.Serialize(Current, JsonOpts));
-        //    }
-        //    catch (Exception ex)
-        //    {
-        //        Trace.WriteLine($"settings.json не записался: {ex.Message}");
-        //    }
-        //}
-
         public static void Load()
         {
             Trace.WriteLine($"[Settings] Load: {FilePath}, файл есть: {File.Exists(FilePath)}");
@@ -117,9 +81,15 @@ namespace Snake3D
                 GameConfig.Ship.TailColor[1],
                 GameConfig.Ship.TailColor[2]
             };
+            Current.ProjectileColor = new[]
+            {
+                GameConfig.Weapon.ProjectileColor[0],
+                GameConfig.Weapon.ProjectileColor[1],
+                GameConfig.Weapon.ProjectileColor[2]
+            };
             Current.Ships.Clear();
             foreach (var v in GameConfig.Ship.Variants)
-                Current.Ships.Add(new ShipSave { Color = v.Color });
+                Current.Ships.Add(new ShipSave { Color = v.Color, GunColor = v.GunColor });
         }
 
         //хранилище -> конфиг (после загрузки)
@@ -132,6 +102,9 @@ namespace Snake3D
             if (Current.TailColor != null && Current.TailColor.Length == 3)
                 GameConfig.Ship.TailColor = Current.TailColor;
 
+            if (Current.ProjectileColor != null && Current.ProjectileColor.Length == 3)
+                GameConfig.Weapon.ProjectileColor = Current.ProjectileColor;
+
             for (int i = 0; i < Current.Ships.Count &&
                             i < GameConfig.Ship.Variants.Length; i++)
             {
@@ -141,6 +114,12 @@ namespace Snake3D
                 for (int p = 0; p < saved.Length && p < live.Length; p++)
                     if (saved[p] != null && saved[p].Length == 3)
                         live[p] = saved[p];
+                var savedGuns = Current.Ships[i].GunColor;
+                var liveGuns = GameConfig.Ship.Variants[i].GunColor;
+                if (savedGuns != null && liveGuns != null)
+                    for (int gp = 0; gp < savedGuns.Length && gp < liveGuns.Length; gp++)
+                        if (savedGuns[gp] != null && savedGuns[gp].Length == 3)
+                            liveGuns[gp] = savedGuns[gp];
             }
         }
     }

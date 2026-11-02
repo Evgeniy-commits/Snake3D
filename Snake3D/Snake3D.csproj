@@ -53,13 +53,17 @@
 		<None Remove="models\Crystall.stp" />
 		<None Remove="models\Engine.stp" />
 		<None Remove="models\Mine.stp" />
+		<None Remove="models\Projectile.stp" />
 		<None Remove="models\Shatl.stp" />
 		<None Remove="models\Shield.stp" />
 		<None Remove="models\Shuttle_0\Cockpit_0.stp" />
 		<None Remove="models\Shuttle_0\Engine_0.stp" />
+		<None Remove="models\Shuttle_0\Gun_0.stp" />
 		<None Remove="models\Shuttle_0\Shuttle_0.stp" />
 		<None Remove="models\Shuttle_1\Cockpit_1.stp" />
 		<None Remove="models\Shuttle_1\Engine_1.stp" />
+		<None Remove="models\Shuttle_1\Gun_0.stp" />
+		<None Remove="models\Shuttle_1\Gun_1.stp" />
 		<None Remove="models\Shuttle_1\Shuttle_1.stl" />
 		<None Remove="models\Shuttle_1\Shuttle_1.stp" />
 		<None Remove="models\Tail.stp" />
@@ -71,10 +75,16 @@
 	    <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
 	  </Content>
 	  <Content Include="image\hangarj.jpg" />
+	  <Content Include="models\Projectile.stp">
+	    <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+	  </Content>
 	  <Content Include="models\Shuttle_0\Cockpit_0.stp">
 	    <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
 	  </Content>
 	  <Content Include="models\Shuttle_0\Engine_0.stp">
+	    <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+	  </Content>
+	  <Content Include="models\Shuttle_0\Gun_0.stp">
 	    <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
 	  </Content>
 	  <Content Include="models\Shuttle_0\Shuttle_0.stp">
@@ -84,6 +94,12 @@
 	    <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
 	  </Content>
 	  <Content Include="models\Shuttle_1\Engine_1.stp">
+	    <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+	  </Content>
+	  <Content Include="models\Shuttle_1\Gun_0.stp">
+	    <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+	  </Content>
+	  <Content Include="models\Shuttle_1\Gun_1.stp">
 	    <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
 	  </Content>
 	  <Content Include="models\Shuttle_1\Shuttle_1.stl">

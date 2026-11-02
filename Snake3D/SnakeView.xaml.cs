@@ -44,6 +44,10 @@ namespace Snake3D
         private bool _markersOn = false;
         private bool _fullscreen;
 
+        // Кольцо прицела: создаётся один раз, дальше — только Display/Erase
+        // на смене состояния и MoveCrosshair каждый кадр (дешёвая матрица)
+        private bool _crosshairOn;
+
         // Свободная камера: до старта, на паузе, после конца партии
         private bool CameraFree =>
             _game == null || !_game.IsRunning || _game.IsPaused;
@@ -185,6 +189,14 @@ namespace Snake3D
                 _game.BoostExpired += () => Audio.Service.PlaySfx("shieldDown");
                 _game.BoostWoreOff += () => Audio.Service.PlaySfx("shieldOff");
 
+                // Оружие: пикап на тех же сэмплах «появился/взял/пропал»,
+                // мину сбили — взрыв, как при столкновении
+                _game.WeaponSpawned += () => Audio.Service.PlaySfx("shieldSpawn");
+                _game.WeaponTaken += () => Audio.Service.PlaySfx("shieldUp");
+                _game.WeaponExpired += () => Audio.Service.PlaySfx("shieldDown");
+                _game.ShotFired += () => Audio.Service.PlaySfx("shot");
+                _game.MineDestroyed += () => Audio.Service.PlaySfx("explosion");
+
                 // 3. События логики приходят из кадрового цикла — в UI-поток через Dispatcher
                 _game.ScoreChanged += (s, score) =>
                     Dispatcher.Invoke(() =>
@@ -223,6 +235,10 @@ namespace Snake3D
                 // Источник опций — opt из меню, отдельного _game.Options нет.
                 _game.ApplyOptions(opt);
                 _game.Reset();
+
+                // Прицел: строим геометрию заранее, чтобы первый выстрел
+                // не платил за сборку кольца. Включение — только при зарядах.
+                _viewport.Proxy!.SetCrosshair(false, 0, 0, 0, GameConfig.Weapon.ProjectileRadius * 2.5);
 
                 // 5. Камера на стартовую позицию корабля. Игра НЕ стартует:
                 // стоит до Space, игрок может открыть Esc-меню и поменять опции.
@@ -418,6 +434,12 @@ namespace Snake3D
                         ? "Полный экран: ВКЛ — G чтобы выйти"
                         : "Полный экран: ВЫКЛ";
                     break;
+                case Key.LeftCtrl:
+                case Key.RightCtrl:
+                    _game.Fire();     // тап — один выстрел, удержание — очередь
+                                      // с частотой FireCooldown: повторные события
+                                      // гасятся кулдауном внутри Fire()
+                    break;
 
             }
         }
@@ -463,6 +485,28 @@ namespace Snake3D
 
             _game.Frame(dt);
 
+            // Прицельное кольцо: точка мира, куда прилетит снаряд.
+            // Кольцо видно только с зарядами — пустой ствол не рисует цель.
+            if (_viewport?.Proxy != null && _game.Ammo > 0 && _game.IsRunning && !_game.IsPaused)
+            {
+                Point3D aim = ComputeAim();
+                _game.SetAimPoint(aim);
+
+                if (!_crosshairOn)
+                {
+                    _crosshairOn = true;
+                    _viewport.Proxy.SetCrosshair(true, aim.X, aim.Y, aim.Z,
+                        GameConfig.Weapon.ProjectileRadius * 2.5);
+                }
+                else
+                    _viewport.Proxy.MoveCrosshair(aim.X, aim.Y, aim.Z);
+            }
+            else if (_crosshairOn)
+            {
+                _crosshairOn = false;
+                _viewport.Proxy.SetCrosshair(false, 0, 0, 0, 1.0);
+            }
+
             // HUD — как раньше, раз в ~30 мс
             if ((DateTime.UtcNow - _lastHudUpdate).TotalMilliseconds >= 30)
             {
@@ -497,6 +541,11 @@ namespace Snake3D
         private void UpdateHudVisuals()
         {
             if (_hud == null) return;
+
+            // Заряды: обновляем вместе с HUD-тиком (30 мс), без отдельного таймера
+            ProgressText.Text = _game.Mode == GameMode.Mission
+                ? $"Кристаллы: {_game.MissionLeft}/{_game.MissionTotal} · Заряды: {_game.Ammo}"
+                : $"Кристаллы: {_game.Crystals.Count} · Заряды: {_game.Ammo}";
 
             bool cockpit = _viewport?.Proxy != null && _viewport.Proxy.IsCockpitView();
             _hud.ShowCrosshair(cockpit);
@@ -647,6 +696,22 @@ namespace Snake3D
             Dispatcher.BeginInvoke(new Action(() =>
                 _viewport?.Proxy?.FollowHead(0, snap: true)),
                 DispatcherPriority.Background);
+        }
+
+        // Точка прицела: голова + интерполированный курс × дистанция.
+        // Берём текущую позицию корабля из игры — снаряд летит «в прицел»,
+        // который виден игроку.
+        private Point3D ComputeAim()
+        {
+            if (_game == null) return new Point3D(0, 0, 0);
+            var f = _game.Forward;
+            double d = f.Length < 1e-9
+                ? GameConfig.Weapon.AimDistance
+                : GameConfig.Weapon.AimDistance;
+            return new Point3D(
+                _game.Head.X + f.X * d,
+                _game.Head.Y + f.Y * d,
+                _game.Head.Z + f.Z * d);
         }
     }
 }

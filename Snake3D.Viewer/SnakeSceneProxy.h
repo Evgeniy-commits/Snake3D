@@ -155,6 +155,12 @@ namespace Snake3DViewer
 		static const int ModelCrystal = 2;
 		static const int ModelMine = 4;
 
+		// 2.3.1 Огонь
+		static const int ModelGunL = 11;
+		static const int ModelGunR = 12;
+		static const int ModelProjectile = 13;
+		static const int ModelWeapon = 14;
+
 		// ── 2.4 Змейка (голова + хвост) ──
 		// Нативные указатели на векторы 
 		std::vector<Handle(AIS_Shape)>* _snakeSegments;
@@ -225,6 +231,36 @@ namespace Snake3DViewer
 		double _spinAngle = 0.0;
 		static constexpr double SpinSpeed = 3.0;		
 
+		// ── 2.13 Снаряды, дула пушек, прицел, пикап оружия ──
+		// Снаряды: плотные векторы — C# владеет индексами, RemoveProjectileAt
+		// делает erase, как у кристаллов и мин. Позиции храним сами:
+		// снаряду не нужен «базовый» центрированный ноль — фолбэк-болт
+		// строится вокруг нуля, переносит его трансформация.
+		std::vector<Handle(AIS_Shape)>* _projectiles;
+		std::vector<gp_Pnt>* _projectilePos;
+		std::vector<gp_Vec>* _projectileDirs;
+
+		//Цвет по умолчанию: меняет кастомайзер.
+		double _projR = 1.00, _projG = 0.72, _projB = 0.20;
+
+		// Дуло: gunId → локальная точка вылета в системе координат ПУШКИ.
+		// Задаёт C# через SetMuzzleOffset, мировую точку считает
+		// GetMuzzleWorld (кадр корабля × подгонка × офсет).
+		// Это конфиг, а не объекты сцены: ClearScene его НЕ трогает —
+		// как _fitTrsf, он выставляется один раз из конструктора игры.
+		std::map<int, gp_XYZ>* _muzzleLocal;
+
+		// Прицел: одно кольцо на арене, ставится и гоняется кадром.
+		// Кэш-схема как у ореола корабля: один объект, только трансформация.
+		NCollection_Haft<Handle(AIS_Shape)> _crosshair;
+		bool _crosshairOn = false;
+
+		// Пикап оружия: одна штука на арене, модель (id 14) либо fallback-сфера.
+		// Оболочка — сфера + клетка из кругов, как у щита и буста, в своём цвете.
+		std::vector<Handle(AIS_Shape)>* _weapons;
+		std::vector<gp_Pnt>* _weaponBase;
+		std::vector<Handle(AIS_Shape)>* _weaponShells;
+
 	public:
 		// ═══════════════════════════════════════════════════════════════
 		// БЛОК 3. ЖИЗНЕННЫЙ ЦИКЛ: конструктор, деструктор, финализатор
@@ -272,6 +308,14 @@ namespace Snake3DViewer
 			_headModel = nullptr;
 			_shipParts = new NCollection_DataMap<int, Handle(AIS_Shape)>();
 			_fitTrsf = new NCollection_DataMap<int, gp_Trsf>();
+
+			_projectiles = new std::vector<Handle(AIS_Shape)>();
+			_projectilePos = new std::vector<gp_Pnt>();
+			_projectileDirs = new std::vector<gp_Vec>();
+			_muzzleLocal = new std::map<int, gp_XYZ>();
+			_weapons = new std::vector<Handle(AIS_Shape)>();
+			_weaponBase = new std::vector<gp_Pnt>();
+			_weaponShells = new std::vector<Handle(AIS_Shape)>();
 		}
 
 		//Под капотом:
@@ -326,6 +370,14 @@ namespace Snake3DViewer
 			delete _segmentDirs;   _segmentDirs = nullptr;
 			delete _shipParts;	   _shipParts = nullptr;
 			delete _fitTrsf;	   _fitTrsf = nullptr;
+
+			delete _projectiles;    _projectiles = nullptr;
+			delete _projectilePos;  _projectilePos = nullptr;
+			delete _projectileDirs; _projectileDirs = nullptr;
+			delete _muzzleLocal;    _muzzleLocal = nullptr;
+			delete _weapons;        _weapons = nullptr;
+			delete _weaponBase;     _weaponBase = nullptr;
+			delete _weaponShells;   _weaponShells = nullptr;
 		}
 
 		!SnakeSceneProxy()
@@ -362,6 +414,14 @@ namespace Snake3DViewer
 			delete _segmentDirs;   _segmentDirs = nullptr;
 			delete _shipParts;	   _shipParts = nullptr;
 			delete _fitTrsf;	   _fitTrsf = nullptr;
+
+			delete _projectiles;    _projectiles = nullptr;
+			delete _projectilePos;  _projectilePos = nullptr;
+			delete _projectileDirs; _projectileDirs = nullptr;
+			delete _muzzleLocal;    _muzzleLocal = nullptr;
+			delete _weapons;        _weapons = nullptr;
+			delete _weaponBase;     _weaponBase = nullptr;
+			delete _weaponShells;   _weaponShells = nullptr;
 		}
 
 		// ═══════════════════════════════════════════════════════════════
@@ -381,7 +441,7 @@ namespace Snake3DViewer
 		//арены.
 		bool LoadStepModel(System::String^ path, int kind, double targetSize)
 		{
-			if (kind < 0 || kind > 10) return false;
+			if (kind < 0 || kind > 20) return false;
 
 			msclr::interop::marshal_context ctx;
 			std::string nativePath = ctx.marshal_as<std::string>(path);
@@ -687,6 +747,11 @@ namespace Snake3DViewer
 				if (!w.IsNull() && !_aisContext().IsNull())
 					_aisContext()->Erase(w, Standard_False);
 			_walls->clear();
+
+			//Оружие
+			ClearProjectiles();
+			RemoveWeapon();
+			SetCrosshair(false, 0.0, 0.0, 0.0, 0.0);
 
 			if (!_aisContext().IsNull())
 				_aisContext()->UpdateCurrentViewer();
@@ -1469,6 +1534,24 @@ namespace Snake3DViewer
 				if (i < _boostShells->size() && !(*_boostShells)[i].IsNull())
 					(*_boostShells)[i]->SetLocalTransformation(trsf);
 			}
+
+			// Пикап оружия: та же матрица, что у кристаллов
+			for (size_t i = 0; i < _weapons->size(); ++i)
+			{
+				if ((*_weapons)[i].IsNull()) continue;
+				gp_Pnt pos = (*_weaponBase)[i];
+				if (!InView(pos.X(), pos.Y(), pos.Z(), 200.0)) continue;
+
+				gp_Trsf trsf;
+				trsf.SetValues(
+					rightR.X(), fwdR.X(), up.X(), pos.X(),
+					rightR.Y(), fwdR.Y(), up.Y(), pos.Y(),
+					rightR.Z(), fwdR.Z(), up.Z(), pos.Z());
+				(*_weapons)[i]->SetLocalTransformation(trsf);
+
+				if (i < _weaponShells->size() && !(*_weaponShells)[i].IsNull())
+					(*_weaponShells)[i]->SetLocalTransformation(trsf);
+			}
 		}
 
 		void UpdateSpin(double dt)
@@ -1842,6 +1925,91 @@ namespace Snake3DViewer
 		}
 
 		// ═══════════════════════════════════════════════════════════════
+		// БЛОК 11.2 Пикап оружия: одна штука на арене
+		// ═══════════════════════════════════════════════════════════════
+		void AddWeaponAt(double x, double y, double z, double size)
+		{
+			gp_Pnt center(x, y, z);
+			Handle(AIS_Shape) aisShape;
+			TopoDS_Shape* model = GetModel(ModelWeapon);
+
+			if (model != nullptr)
+			{
+				aisShape = new AIS_Shape(*model);
+				aisShape->SetColor(Quantity_Color(1.00, 0.45, 0.10, Quantity_TOC_RGB)); // оружейный оранжевый
+				aisShape->SetTransparency(0.0);
+			}
+			else
+			{
+				// Фолбэки обязательны: aisShape не должен остаться пустым (БЛОК 6)
+				BRepPrimAPI_MakeSphere big(center, size * 0.6);
+				aisShape = new AIS_Shape(big.Shape());
+				aisShape->SetColor(Quantity_Color(1.00, 0.45, 0.10, Quantity_TOC_RGB));
+			}
+			aisShape->SetDisplayMode(1);
+
+			_weapons->push_back(aisShape);
+			_weaponBase->push_back(center);
+
+			if (model != nullptr)
+			{
+				gp_Trsf trans;
+				trans.SetTranslation(gp_Vec(gp_Pnt(0, 0, 0), center));
+				aisShape->SetLocalTransformation(trans);
+			}
+
+			// Оболочка пикапа: та же схема «сфера + клетка», что у щита и буста —
+			// игрок обязан отличать её от кристалла с любого ракурса
+			const double shellR = size * 1.5;
+			const double cageR = shellR * 0.9;
+			const double s45 = 0.7;
+			static const double axes[3][3] = {
+				{ 0.0,  s45, s45 },
+				{ s45,  0.0, s45 },
+				{ 0.0, -s45, s45 }
+			};
+
+			TopoDS_Compound shell;
+			BRep_Builder bb;
+			bb.MakeCompound(shell);
+			bb.Add(shell, BRepPrimAPI_MakeSphere(shellR).Shape());
+			for (int k = 0; k < 3; ++k)
+			{
+				gp_Ax2 ax(gp_Pnt(0, 0, 0), gp_Dir(axes[k][0], axes[k][1], axes[k][2]));
+				bb.Add(shell, BRepBuilderAPI_MakeEdge(gp_Circ(ax, cageR)).Edge());
+			}
+
+			Handle(AIS_Shape) shellShape = new AIS_Shape(shell);
+			shellShape->SetDisplayMode(1);
+			shellShape->SetColor(Quantity_Color(1.00, 0.45, 0.10, Quantity_TOC_RGB));
+			shellShape->SetTransparency(0.55);
+
+			gp_Trsf init;
+			init.SetTranslation(gp_Vec(gp_Pnt(0, 0, 0), center));
+			shellShape->SetLocalTransformation(init);
+			_weaponShells->push_back(shellShape);
+
+			// Стандартный_False: пикап один, но общая перерисовка кадра дешевле
+			_aisContext()->Display(shellShape, Standard_False);
+			_aisContext()->Display(aisShape, Standard_True);
+		}
+
+		// Пикап подобран или пропало время: убираем целиком
+		void RemoveWeapon()
+		{
+			if (!_aisContext().IsNull())
+			{
+				for (auto& w : *_weapons)
+					if (!w.IsNull()) _aisContext()->Erase(w, Standard_False);
+				for (auto& w : *_weaponShells)
+					if (!w.IsNull()) _aisContext()->Erase(w, Standard_False);
+			}
+			_weapons->clear();
+			_weaponBase->clear();
+			_weaponShells->clear();
+		}
+
+		// ═══════════════════════════════════════════════════════════════
 		// БЛОК 12. МИНЫ
 		// ═══════════════════════════════════════════════════════════════
 		void RemoveMineAt(int index)
@@ -1896,6 +2064,155 @@ namespace Snake3DViewer
 			}
 
 			_aisContext()->Display(aisShape, Standard_True);
+		}
+
+		// ═══════════════════════════════════════════════════════════════
+		// БЛОК 12.1 СНАРЯДЫ: плазменный заряд
+		// ═══════════════════════════════════════════════════════════════
+		// Цвет по умолчанию для будущих снарядов (меняет кастомайзер)
+		void SetProjectileColor(double r, double g, double b)
+		{
+			_projR = r; _projG = g; _projB = b;
+		}
+
+		// Перекрасить уже летящие (смена настроек на лету)
+		void SetProjectileColorAt(int index, double r, double g, double b)
+		{
+			if (index < 0 || index >= (int)_projectiles->size()) return;
+			if ((*_projectiles)[index].IsNull()) return;
+			(*_projectiles)[index]->SetColor(Quantity_Color(r, g, b, Quantity_TOC_RGB));
+		}
+
+		// Платье снаряда — не модель, а процедурный «болт» из двух капсул:
+		// яркое ядро (полёт) и бледный хвост (след). Обе строим вдоль
+		// локальной Y — разворот по вектору полёта уже делает MoveProjectile
+		// тем же базисом, что у хвоста: локальная Y смотрит по курсу.
+		void AddProjectileAt(int index, double x, double y, double z,
+			double dirX, double dirY, double dirZ,
+			double size)
+		{
+			gp_Pnt center(x, y, z);
+			Handle(AIS_Shape) aisShape;
+			TopoDS_Shape* model = GetModel(ModelProjectile);
+
+			if (model != nullptr)
+			{
+				// Модель снаряда загрузили — используем её
+				aisShape = new AIS_Shape(*model);
+				aisShape->SetColor(Quantity_Color(_projR, _projG, _projB, Quantity_TOC_RGB));
+				aisShape->SetTransparency(0.0);
+			}
+			else
+			{
+				// Ядро: капсула = цилиндр + полусферы, длина ~4 размера, ось — локальная Y
+				double coreLen = size * 4.0;
+				double coreR = size;
+
+				TopoDS_Compound bolt;
+				BRep_Builder bb;
+				bb.MakeCompound(bolt);
+
+				gp_Ax2 coreAxis(gp_Pnt(0, -coreLen / 2.0, 0), gp_Dir(0, 1, 0));
+				bb.Add(bolt, BRepPrimAPI_MakeCylinder(coreAxis, coreR, coreLen).Shape());
+				bb.Add(bolt, BRepPrimAPI_MakeSphere(gp_Pnt(0, -coreLen / 2.0, 0), coreR).Shape());
+				bb.Add(bolt, BRepPrimAPI_MakeSphere(gp_Pnt(0, coreLen / 2.0, 0), coreR).Shape());
+
+				// Хвост: тоньше и длиннее, тянется назад (−Y), полупрозрачный.
+				// Двух капсул хватает: на скорости глаз склеивает их в полосу.
+				double tailLen = size * 9.0;
+				double tailR = size * 0.45;
+
+				gp_Ax2 tailAxis(gp_Pnt(0, -coreLen / 2.0 - tailLen, 0), gp_Dir(0, 1, 0));
+				bb.Add(bolt, BRepPrimAPI_MakeCylinder(tailAxis, tailR, tailLen).Shape());
+				bb.Add(bolt, BRepPrimAPI_MakeSphere(gp_Pnt(0, -coreLen / 2.0 - tailLen, 0), tailR).Shape());
+
+				aisShape = new AIS_Shape(bolt);
+				aisShape->SetColor(Quantity_Color(_projR, _projG, _projB, Quantity_TOC_RGB));
+				// Один цвет на весь компаунд, «два слоя» создаёт прозрачность:
+				// хвост просвечивает сквозь ядро — дёшево и читается
+				aisShape->SetTransparency(0.25);
+			}
+			aisShape->SetDisplayMode(1);
+
+			if (index >= (int)_projectiles->size())    _projectiles->resize(index + 1);
+			if (index >= (int)_projectilePos->size())  _projectilePos->resize(index + 1, gp_Pnt(0, 0, 0));
+			if (index >= (int)_projectileDirs->size()) _projectileDirs->resize(index + 1, gp_Vec(0, 1, 0));
+			(*_projectiles)[index] = aisShape;
+			(*_projectilePos)[index] = center;
+			(*_projectileDirs)[index] = gp_Vec(dirX, dirY, dirZ);
+
+			if (model == nullptr)
+			{
+				// Компаунд строится вокруг нуля: перенос в точку спавна сразу,
+				// как у кристаллов — до первого кадра болт не висит в origin
+				gp_Trsf trans;
+				trans.SetTranslation(gp_Vec(gp_Pnt(0, 0, 0), center));
+				aisShape->SetLocalTransformation(trans);
+			}
+
+			// Выстрелов за кадр может быть несколько — перерисовка общая,
+			// её делает Redraw() игрового кадра
+			_aisContext()->Display(aisShape, Standard_False);
+		}
+
+		// Ориентация: нос снаряда вдоль вектора полёта. Тот же базис
+		// right/fwd/up, что у хвоста в MoveSegment — локальная Y модели
+		// смотрит по курсу. Фолбэк-сферу (если модель задана) не вертим —
+		// только перенос.
+		void MoveProjectile(int index, double x, double y, double z)
+		{
+			if (index < 0 || index >= (int)_projectiles->size()) return;
+			if ((*_projectiles)[index].IsNull()) return;
+
+			gp_Pnt newPos(x, y, z);
+			(*_projectilePos)[index] = newPos;
+
+			gp_Vec dir = (*_projectileDirs)[index];
+			double len = dir.Magnitude();
+			gp_Trsf trsf;
+
+			if (len > 1e-6 && GetModel(ModelProjectile))
+			{
+				gp_Dir fwd(dir);
+				gp_Dir upRef(0, 0, 1);
+				if (std::abs(fwd.Z()) > 0.999) upRef = gp_Dir(0, 1, 0);
+
+				gp_Dir right = fwd.Crossed(upRef);
+				gp_Dir up = gp_Dir(right.Crossed(fwd));
+
+				trsf.SetValues(
+					right.X(), fwd.X(), up.X(), newPos.X(),
+					right.Y(), fwd.Y(), up.Y(), newPos.Y(),
+					right.Z(), fwd.Z(), up.Z(), newPos.Z());
+			}
+			else
+			{
+				trsf.SetTranslation(gp_Vec(gp_Pnt(0, 0, 0), newPos));
+			}
+
+			(*_projectiles)[index]->SetLocalTransformation(trsf);
+		}
+
+		void RemoveProjectileAt(int index)
+		{
+			if (index < 0 || index >= (int)_projectiles->size()) return;
+			if (!(*_projectiles)[index].IsNull() && !_aisContext().IsNull())
+				_aisContext()->Erase((*_projectiles)[index], Standard_False);
+			_projectiles->erase(_projectiles->begin() + index);
+			if (index < (int)_projectilePos->size())
+				_projectilePos->erase(_projectilePos->begin() + index);
+			if (index < (int)_projectileDirs->size())
+				_projectileDirs->erase(_projectileDirs->begin() + index);
+		}
+
+		void ClearProjectiles()
+		{
+			for (auto& p : *_projectiles)
+				if (!p.IsNull() && !_aisContext().IsNull())
+					_aisContext()->Erase(p, Standard_False);
+			_projectiles->clear();
+			_projectilePos->clear();
+			_projectileDirs->clear();
 		}
 
 		// ═══════════════════════════════════════════════════════════════
@@ -2219,6 +2536,8 @@ namespace Snake3DViewer
 			}
 		}
 
+
+
 		// Создать часть корабля из уже загруженной модели и поставить на сцену.
 		// Трансформацию применит PlaceShip (общий кадр × _fitTrsf) в первом же кадре.
 		bool AddShipPart(int id)
@@ -2290,7 +2609,102 @@ namespace Snake3DViewer
 		}
 
 		// ═══════════════════════════════════════════════════════════════
-		// БЛОК 15.1 Разработка космопорт - предпросмотр
+		// БЛОК 15.1 ПУШКИ: ДУЛО
+		// ═══════════════════════════════════════════════════════════════
+		// Локальная точка вылета в системе координат ПУШКИ (после подгонки).
+		// Пушка — та же часть корабля, что корма и крылья: LoadShipPart(11|12)
+		// + SetPartPlacement. Офсет — куда «смотрит» ствол, C# подбирает его
+		// в космопорте на глаз, вместе с подгонкой самой модели.
+		void SetMuzzleOffset(int gunId, double dx, double dy, double dz)
+		{
+			(*_muzzleLocal)[gunId] = gp_XYZ(dx, dy, dz);
+		}
+
+		// Мировая точка вылета: кадр корабля × подгоночная трансформация × офсет.
+		// Вызывается C# в момент выстрела — один вызов, без пофреймового оверхеда.
+		bool GetMuzzleWorld(int gunId,
+			double headX, double headY, double headZ,
+			double fx, double fy, double fz,
+			double ux, double uy, double uz,
+			double% wx, double% wy, double% wz)
+		{
+			auto it = _muzzleLocal->find(gunId);
+			if (it == _muzzleLocal->end()) return false;
+			if (!_fitTrsf->IsBound(gunId)) return false;
+
+			gp_Trsf head = TrsfFromFrame(headX, headY, headZ, fx, fy, fz, ux, uy, uz);
+			gp_Trsf full = head.Multiplied((*_fitTrsf)(gunId));
+
+			gp_Pnt p(it->second.X(), it->second.Y(), it->second.Z());
+			p.Transform(full);
+
+			wx = p.X(); wy = p.Y(); wz = p.Z();
+			return true;
+		}
+
+		// ═══════════════════════════════════════════════════════════════
+		// БЛОК 15.2 ПРИЦЕЛ
+		// ═══════════════════════════════════════════════════════════════
+		// 3D-кольцо на арене: показывает, куда попадёт снаряд. Одно кольцо,
+		// две окружности крест-накрест — та же схема «живой» структуры,
+		// что у ореолов кристаллов. Наклон осей на 45°, иначе вращение не видно.
+		// Позицию каждый кадр двигает MoveCrosshair (C# / HudOverlay).
+		void SetCrosshair(bool on, double x, double y, double z, double size)
+		{
+			if (!_crosshairOn)
+			{
+				// Построение только при первом включении — дальше только Display/Erase
+				const double s45 = 0.7;
+				static const double axes[2][3] = {
+					{ 0.0, s45, s45 },
+					{ s45, 0.0, s45 }
+				};
+
+				TopoDS_Compound ring;
+				BRep_Builder bb;
+				bb.MakeCompound(ring);
+				for (int k = 0; k < 2; ++k)
+				{
+					gp_Ax2 ax(gp_Pnt(0, 0, 0), gp_Dir(axes[k][0], axes[k][1], axes[k][2]));
+					bb.Add(ring, BRepBuilderAPI_MakeEdge(gp_Circ(ax, size)).Edge());
+				}
+
+				Handle(AIS_Shape) c = new AIS_Shape(ring);
+				c->SetDisplayMode(0); // каркас — прицел не должен заслонять цель
+				c->SetColor(Quantity_Color(1.00, 0.30, 0.25, Quantity_TOC_RGB)); // сигнальный красный
+				_crosshair() = c;
+			}
+			_crosshairOn = on;
+
+			if (_aisContext().IsNull() || _crosshair().IsNull()) return;
+
+			if (on)
+			{
+				gp_Trsf trans;
+				trans.SetTranslation(gp_Vec(gp_Pnt(0, 0, 0), gp_Pnt(x, y, z)));
+				_crosshair()->SetLocalTransformation(trans);
+				_aisContext()->Display(_crosshair(), Standard_False);
+			}
+			else
+				_aisContext()->Erase(_crosshair(), Standard_False);
+
+			_aisContext()->UpdateCurrentViewer();
+		}
+
+		// Перенос прицела без пересборки геометрии — вызывается каждый кадр.
+		// UpdateCurrentViewer НЕ зовём — общий Redraw() кадра сделает своё
+		void MoveCrosshair(double x, double y, double z)
+		{
+			if (!_crosshairOn || _crosshair().IsNull() || _aisContext().IsNull()) return;
+
+			gp_Trsf trans;
+			trans.SetTranslation(gp_Vec(gp_Pnt(0, 0, 0), gp_Pnt(x, y, z)));
+			_crosshair()->SetLocalTransformation(trans);
+		}
+
+
+		// ═══════════════════════════════════════════════════════════════
+		// БЛОК 15.3 Разработка космопорт - предпросмотр
 		// ═══════════════════════════════════════════════════════════════
 		// Цвет хвоста по умолчанию для будущих AddSegment
 		void SetTailColor(double r, double g, double b)

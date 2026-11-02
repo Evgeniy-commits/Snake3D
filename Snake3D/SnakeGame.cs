@@ -129,6 +129,13 @@ namespace Snake3D
         private int _mineCount = GameConfig.DefaultMineCount;
         private int _crystalCount = GameConfig.DefaultCrystalCount;
 
+        // Размазываем спавн по кадрам
+        // Отложенный спавн мин: минируем просадку кадра.
+        // CheckCollisions только ставит счётчик, а реальный спавн
+        // идёт по одному объекту за кадр, в пределах временного бюджета.
+        private int _pendingMineSpawns;
+        private const double MineSpawnBudgetMs = 1.5;   // мс на кадр, подбирается по трейсу
+
         // ── 3.4 Супер-кристаллы ──
         // Супер-кристаллы: три штуки, всплывают после 10 съеденных обычных,
         // живут минуту, затем возвращаются в пул обычных
@@ -138,7 +145,7 @@ namespace Snake3D
         private const double SuperDuration = 60.0;
 
         private readonly List<Point3D> _superCrystals = new();
-        public IReadOnlyList<Point3D> SuperCrystals => _superCrystals;
+        public IReadOnlyList<Point3D> SuperCrystals => _superCrystals;        
 
         private bool _superActive;      // окно супер-кристаллов открыто
         private double _superTimer;     // сколько осталось до конца окна
@@ -170,7 +177,46 @@ namespace Snake3D
         public IReadOnlyList<Point3D> Boosts => _boosts;
         public bool BoostActive => _boostActive;
         public double BoostRemaining => _boostActive ? _boostTimer : 0.0;
-           
+
+        //--- 3.5.2 ---
+        //Оружие: пикап, магазин, снаряды.
+        //Цикл: собрано GameConfig.Weapon.TriggerCount кристаллов →
+        //на арене появляется пикап (живёт GameConfig.Weapon.LifeTime секунд).
+        //Поднял — в магазин падает ShotsPerPickup снарядов, заряды КОПЯТ.
+        //Не поднял — пикап исчез, счётчик кристаллов заново.
+        private int _crystalsSinceWeapon;
+        private bool _weaponOnField;
+        private double _weaponLifeTimer;
+        private int _ammo;                       // накопленные снаряды (копятся между пикапами)
+        private double _fireCooldown;            // пауза между выстрелами
+        private int _lastGunIndex;               // чередование стволов L/R
+
+        private readonly List<Point3D> _weaponPickups = new();
+        public IReadOnlyList<Point3D> WeaponPickups => _weaponPickups;
+        public bool WeaponOnField => _weaponOnField;
+        public int Ammo => _ammo;
+
+        // Снаряды в полёте: параллельный список к прокси. Порядок совпадает:
+        // RemoveProjectileAt(i) в прокси стирает i-й и сдвигает хвост — RemoveAt(i)
+        // в C# сдвигает точно так же, индексы не разъезжаются.
+        private sealed class Projectile
+        {
+            public Point3D Pos;
+            public Vector3D Dir;
+            public double Life;
+        }
+        private readonly List<Projectile> _projectiles = new();
+        public int ProjectileCount => _projectiles.Count;
+
+        // Точка прицела: её ставит View из HudOverlay (мышь/центр экрана).
+        // До первого вызова — точка впереди по курсу.
+        private Point3D _aimPoint;
+        public void SetAimPoint(Point3D p) => _aimPoint = p;
+
+        // Точка входа для View: ComputeAim в SnakeView читает их каждый кадр,
+        // чтобы поставить кольцо прицела впереди корабля по курсу
+        public Point3D Head => _segments.Count > 0 ? _segments[0] : default;
+        public Vector3D Forward => _forward;
 
         // ── 3.6 Ориентация и повороты ──
         private Vector3D _forward;   // куда летим
@@ -239,6 +285,13 @@ namespace Snake3D
         public event Action? BoostTaken;
         public event Action? BoostExpired;   // буст пропал не собранным
         public event Action? BoostWoreOff;   // ускорение закончилось
+
+        public event Action? WeaponSpawned;
+        public event Action? WeaponTaken;      // пикап подобран, снаряды в магазине
+        public event Action? WeaponExpired;    // пикап пропал не поднятым
+        public event Action? ShotFired;        // выстрел (звук, вспышка)
+        public event Action? ShotBlocked;      // нажал выстрел при пустом магазине
+        public event Action? MineDestroyed;    // мину сбили
 
         // ── 3.10 Замеры производительности ──
         //Для замера производительности
@@ -328,6 +381,38 @@ namespace Snake3D
                     _proxy.SetPartColor(id, c[0], c[1], c[2], ship.Material[i]);
                 }
             }
+
+            // Пушки: id 11 (левая) и 12 (правая). Одна или две — решает массив
+            // GunPaths: одна пушка = массив длины 1, две = длины 2.
+            // У каждой — свои подгонка, цвет и офсет дула.
+            bool gunsOk = true;
+            for (int i = 0; i < ship.GunPaths.Length; i++)
+            {
+                int id = GameConfig.Weapon.GunIdBase + i;
+                gunsOk &= _proxy.LoadShipPart(ship.GunPaths[i], id, ship.GunScale);
+                var f = ship.GunFit[i];
+                _proxy.SetPartPlacement(id, f[0], f[1], f[2], f[3], f[4], f[5]);
+                _proxy.AddShipPart(id);
+                var c = ship.GunColor[i];
+                _proxy.SetPartColor(id, c[0], c[1], c[2], ship.GunMaterial[i]);
+                var m = ship.MuzzleOffset[i];
+                _proxy.SetMuzzleOffset(id, m[0], m[1], m[2]);
+            }
+            System.Diagnostics.Trace.WriteLine($"Пушки: {gunsOk}");
+
+            // Снаряд: модель, если файл есть; иначе прокси рисует fallback-болт
+            bool projOk = _proxy.LoadStepModel(
+                System.IO.Path.Combine(modelsDir, "Projectile.stp"),
+                GameConfig.Weapon.ProjectileModelId,
+                GameConfig.Weapon.ProjectileSize * 6);
+            System.Diagnostics.Trace.WriteLine($"[Weapon] Projectile: {projOk}");
+
+            // Пикап оружия: модель, если файл есть; иначе fallback-сфера
+            bool pickupOk = _proxy.LoadStepModel(
+                System.IO.Path.Combine(modelsDir, "WeaponPickup.stp"),
+                GameConfig.Weapon.PickupModelId,
+                GameConfig.Weapon.FallbackRadius * 2);
+            System.Diagnostics.Trace.WriteLine($"[Weapon] Pickup: {pickupOk}");
         }
 
         public void Start()
@@ -433,6 +518,15 @@ namespace Snake3D
                     var c = ship.Color[i];
                     _proxy.SetPartColor(id, c[0], c[1], c[2], ship.Material[i]);
                 }
+
+                // пушки — регистрируем заново: ClearScene их стёр
+                for (int i = 0; i < ship.GunPaths.Length; i++)
+                {
+                    int id = GameConfig.Weapon.GunIdBase + i;
+                    _proxy.AddShipPart(id);
+                    var c = ship.GunColor[i];
+                    _proxy.SetPartColor(id, c[0], c[1], c[2], ship.GunMaterial[i]);
+                }
             }
 
             _segments.Clear();
@@ -477,6 +571,7 @@ namespace Snake3D
             EnsureCrystals();
 
             _mines.Clear();
+            _pendingMineSpawns = 0;
             EnsureMines();
 
             _shields.Clear();
@@ -494,6 +589,20 @@ namespace Snake3D
             _boostTimer = 0.0;
             _proxy.RemoveBoost();
             _proxy.SetShipBoost(false, 0.0);
+
+            // Оружие: пикапы и магазин — чистый лист
+            _weaponPickups.Clear();
+            _proxy.RemoveWeapon();
+            _weaponOnField = false;
+            _crystalsSinceWeapon = 0;
+            _weaponLifeTimer = 0.0;
+
+            _projectiles.Clear();
+            _proxy.ClearProjectiles();
+            _ammo = 0;
+            _fireCooldown = 0.0;
+            _lastGunIndex = 0;
+            _aimPoint = new Point3D(0, GameConfig.Weapon.AimDistance, 0);   // вперёд по Y, как _forward после Reset
 
             Score = 0;
             ScoreChanged?.Invoke(this, Score);
@@ -637,11 +746,11 @@ namespace Snake3D
 
                     if (_mode == GameMode.FreeHunt)
                     {
-                        EnsureCrystals();      // охота: поле кристаллов пополняется, как раньше
-                        SpawnMines(1);         // охота: каждый съеденный кристалл добавляет одну мину
+                        EnsureCrystals();           // охота: поле кристаллов пополняется, как раньше
+                        QueueMineSpawns(1);         // охота: каждый съеденный кристалл добавляет одну мину
                     }                      
                     else
-                        SpawnMines(GameConfig.MinesPerCristal);  // миссия: расплата минами
+                        QueueMineSpawns(GameConfig.MinesPerCristal);  // миссия: расплата минами
 
                     // Отсчёт до спавна супер-кристаллов: идёт только пока окно закрыто
                     if (!_superActive)
@@ -672,6 +781,11 @@ namespace Snake3D
                             SpawnBoost();
                     }
 
+                    _crystalsSinceWeapon++;
+                    System.Diagnostics.Trace.WriteLine($"weapon counter: {_crystalsSinceWeapon}");
+                    if (_crystalsSinceWeapon >= GameConfig.Weapon.TriggerCount)
+                        SpawnWeapon();
+
                     if (_mode == GameMode.Mission && _crystals.Count == 0 && _superCrystals.Count == 0)
                     {
                         TriggerVictory();
@@ -684,7 +798,7 @@ namespace Snake3D
             // Супер-кристаллы: коллизии те же, что у обычного, награда 20
             for (int i = 0; i < _superCrystals.Count; i++)
             {
-                if (Distance(newHead, _superCrystals[i]) <= combinedRadius + tolerance)
+                if (Distance(newHead, _superCrystals[i]) <= _segmentRadius + GameConfig.SuperCrystalRadius + tolerance)
                 {
                     Score += SuperCrystalScore;
                     ScoreChanged?.Invoke(this, Score);
@@ -716,6 +830,10 @@ namespace Snake3D
                         if (_crystalsSinceBoost >= GameConfig.Boost.TriggerCount)
                             SpawnBoost();
                     }
+
+                    _crystalsSinceWeapon++;
+                    if (_crystalsSinceWeapon >= GameConfig.Weapon.TriggerCount)
+                        SpawnWeapon();
 
                     break;
                 }
@@ -753,6 +871,21 @@ namespace Snake3D
                     _proxy.SetShipBoost(true, GameConfig.Boost.ShipHaloRadius);
 
                     BoostTaken?.Invoke();
+                    break;
+                }
+            }
+
+            for (int i = 0; i < _weaponPickups.Count; i++)
+            {
+                if (Distance(newHead, _weaponPickups[i]) <= _segmentRadius + GameConfig.Weapon.FallbackRadius + tolerance)
+                {
+                    _proxy.RemoveWeapon();
+                    _weaponPickups.RemoveAt(i);
+                    _weaponOnField = false;
+
+                    _ammo += GameConfig.Weapon.ShotsPerPickup;   // копим: поверх остатка
+                    _crystalsSinceWeapon = 0;   // счёт к следующему пикапу — после его судьбы
+                    WeaponTaken?.Invoke();
                     break;
                 }
             }
@@ -901,6 +1034,9 @@ namespace Snake3D
                 TickSuperCrystals(dt);   // минута супер-кристаллов: тикает пока игра активна
                 TickShield(dt);
                 TickBoost(dt);
+                TickWeapon(dt);
+                TickProjectiles(dt);   // снаряды тикают каждый кадр, не по логике
+                ProcessDeferredMineSpawns();   // <-- спавн мин порциями вне логического тика
             }
 
             _pulsePhase += dt * (2.0 * Math.PI / 0.4);
@@ -1165,46 +1301,64 @@ namespace Snake3D
         //(иначе игра зависнет, если арена забита объектами).
         private Point3D FindFreeSpot()
         {
-            double margin = 1.5;
-            for (int attempt = 0; attempt < 200; attempt++)
+            const double margin = 1.5;
+            for (int attempt = 0; attempt < 150; attempt++)
             {
-                double x = _rand.NextDouble() * (_arenaSize - 2 * margin) - (_arenaSize / 2 - margin);
-                double y = _rand.NextDouble() * (_arenaSize - 2 * margin) - (_arenaSize / 2 - margin);
-                double z = _rand.NextDouble() * (_arenaSize - 2 * margin) - (_arenaSize / 2 - margin);
-                var p = new Point3D(x, y, z);
-
-                bool free = true;
-
-                // не на змейке
-                foreach (var s in _segments)
-                    if (Distance(p, s) < _segmentRadius + _foodRadius + 2.0) { free = false; break; }
-
-                // не на другом кристалле
-                if (free)
-                    foreach (var c in _crystals)
-                        if (Distance(p, c) < _foodRadius * 2 + 2.0) { free = false; break; }
-
-                if (free)
-                    foreach (var m in _mines)
-                        if (Distance(p, m) < _foodRadius * 2 + 2.0) { free = false; break; }
-
-                if (free)
-                    foreach (var s in _superCrystals)
-                        if (Distance(p, s) < _foodRadius * 2 + 2.0) { free = false; break; }
-
-                if (free)
-                    foreach (var s in _shields)
-                        if (Distance(p, s) < GameConfig.Shield.FallbackRadius * 2 + 2.0) { free = false; break; }
-
-                if (free) return p;
+                var p = RandomPoint(margin);
+                if (IsFree(p, full: true)) return p;
             }
-            // не нашли за 200 попыток — ставим куда угодно в пределах
-            return new Point3D(
-                _rand.NextDouble() * (_arenaSize - 2 * margin) - (_arenaSize / 2 - margin),
-                _rand.NextDouble() * (_arenaSize - 2 * margin) - (_arenaSize / 2 - margin),
-                _rand.NextDouble() * (_arenaSize - 2 * margin) - (_arenaSize / 2 - margin));
+            for (int attempt = 0; attempt < 50; attempt++)
+            {
+                var p = RandomPoint(margin);
+                if (IsFree(p, full: false)) return p;
+            }
+            return RandomPoint(margin);   // астрономически маловероятно после второго прохода
         }
 
+        private Point3D RandomPoint(double margin) => new Point3D(
+        _rand.NextDouble() * (_arenaSize - 2 * margin) - (_arenaSize / 2 - margin),
+        _rand.NextDouble() * (_arenaSize - 2 * margin) - (_arenaSize / 2 - margin),
+        _rand.NextDouble() * (_arenaSize - 2 * margin) - (_arenaSize / 2 - margin));
+
+        private static double DistanceSq(Point3D a, Point3D b)
+        {
+            double dx = a.X - b.X, dy = a.Y - b.Y, dz = a.Z - b.Z;
+            return dx * dx + dy * dy + dz * dz;
+        }
+
+        private bool IsFree(Point3D p, bool full)
+        {
+            double segR = _segmentRadius + _foodRadius + 2.0;
+            double segR2 = segR * segR;
+            foreach (var s in _segments)
+                if (DistanceSq(p, s) < segR2) return false;
+
+            double wpR = GameConfig.Weapon.FallbackRadius * 2 + 2.0;
+            double wpR2 = wpR * wpR;
+            foreach (var s in _weaponPickups)
+                if (DistanceSq(p, s) < wpR2) return false;
+
+            double shR = GameConfig.Shield.FallbackRadius * 2 + 2.0;
+            double shR2 = shR * shR;
+            foreach (var s in _shields)
+                if (DistanceSq(p, s) < shR2) return false;
+
+            if (!full) return true;
+
+            double crR = _foodRadius * 2 + 2.0;
+            double crR2 = crR * crR;
+            foreach (var c in _crystals)
+                if (DistanceSq(p, c) < crR2) return false;
+            double suR = GameConfig.SuperCrystalRadius * 2 + 2.0;
+            double suR2 = suR * suR;
+            foreach (var s in _superCrystals)
+                if (DistanceSq(p, s) < suR2) return false;
+            foreach (var m in _mines)
+                if (DistanceSq(p, m) < crR2) return false;
+
+            return true;
+        }
+        
         private void EnsureCrystals()
         {
             // Сумма обычных и супер не должна превышать норму поля —
@@ -1227,14 +1381,45 @@ namespace Snake3D
             }
         }
 
-        private void SpawnMines(int count)
+        //private void SpawnMines(int count)
+        //{
+        //    for (int k = 0; k < count && _mines.Count < GameConfig.MaxMineCount; k++)
+        //    {
+        //        Point3D p = FindFreeSpot();
+        //        _mines.Add(p);
+        //        _proxy.AddMineAt(_mines.Count - 1, p.X, p.Y, p.Z, _foodRadius);
+        //    }
+        //}
+
+        // Поставить мины «в очередь»: реальное создание геометрии размажется по кадрам
+        private void QueueMineSpawns(int count)
         {
-            for (int k = 0; k < count && _mines.Count < GameConfig.MaxMineCount; k++)
+            // не выходим за потолок арены с учётом уже запланированных
+            int room = GameConfig.MaxMineCount - _mines.Count - _pendingMineSpawns;
+            if (room <= 0) return;
+            if (count > room) count = room;
+            _pendingMineSpawns += count;
+        }
+
+        private void SpawnOneMine()
+        {
+            Point3D p = FindFreeSpot();
+            _mines.Add(p);
+            _proxy.AddMineAt(_mines.Count - 1, p.X, p.Y, p.Z, _foodRadius);
+        }
+
+        // Вызывается из Frame раз в кадр, только пока партия активна
+        private void ProcessDeferredMineSpawns()
+        {
+            if (_pendingMineSpawns <= 0) return;
+
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            do
             {
-                Point3D p = FindFreeSpot();
-                _mines.Add(p);
-                _proxy.AddMineAt(_mines.Count - 1, p.X, p.Y, p.Z, _foodRadius);
+                SpawnOneMine();
+                _pendingMineSpawns--;
             }
+            while (_pendingMineSpawns > 0 && sw.Elapsed.TotalMilliseconds < MineSpawnBudgetMs);
         }
 
         // Спавн супер-кристаллов: три обычных случайных заменяются крупными фиолетовыми.
@@ -1370,6 +1555,135 @@ namespace Snake3D
             }
         }
 
+        //ОРУЖИЕ
+        private void SpawnWeapon()
+        {
+            if (_weaponOnField) return;   // второй пикап не нужен — активный ещё на поле
+
+            Point3D p = FindFreeSpot();
+            _weaponPickups.Add(p);
+            _proxy.AddWeaponAt(p.X, p.Y, p.Z, GameConfig.Weapon.FallbackRadius);
+            _weaponOnField = true;
+            _weaponLifeTimer = GameConfig.Weapon.LifeTime;   // 30 секунд на поднятие
+            _crystalsSinceWeapon = 0;
+            WeaponSpawned?.Invoke();
+            System.Diagnostics.Trace.WriteLine("[Weapon] пикап заспавнен");
+        }
+
+        private void TickWeapon(double dt)
+        {
+            if (_weaponOnField)
+            {
+                _weaponLifeTimer -= dt;
+                if (_weaponLifeTimer <= 0)
+                {
+                    _proxy.RemoveWeapon();
+                    _weaponPickups.Clear();
+                    _weaponOnField = false;
+                    _crystalsSinceWeapon = 0;   // не подняли — кристаллы считаем заново
+                    WeaponExpired?.Invoke();
+                }
+            }
+
+            if (_fireCooldown > 0)
+                _fireCooldown -= dt;
+        }
+
+        // ═══════════════════════════════════════════════════════════════════
+        // БЛОК 10.5 ОРУЖИЕ: выстрел и полёт снарядов
+        // ═══════════════════════════════════════════════════════════════════
+        // Выстрел: View ловит клавишу и зовёт Fire(). Дуло считает прокси
+        // (кадр корабля × подгонка пушки × офсет — GetMuzzleWorld), стволы
+        // чередуются L/R. Направление — из дула в точку прицела: снаряд
+        // «прилетает в прицел», который двигает HudOverlay.
+        public bool Fire()
+        {
+            if (!IsRunning || IsGameOver || IsPaused) return false;
+            if (_segments.Count == 0) return false;
+            if (_ammo <= 0) { ShotBlocked?.Invoke(); return false; }
+            if (_fireCooldown > 0) return false;
+
+            Point3D head = _segments[0];
+            int gunCount = GameConfig.Weapon.GunIds.Length;
+            int gun = GameConfig.Weapon.GunIds[_lastGunIndex % gunCount];
+            _lastGunIndex++;
+
+            double wx = 0, wy = 0, wz = 0;
+            bool ok = _proxy.GetMuzzleWorld(
+                gun, head.X, head.Y, head.Z,
+                _forward.X, _forward.Y, _forward.Z,
+                _up.X, _up.Y, _up.Z,
+                ref wx, ref wy, ref wz);
+            if (!ok) return false;   // ствол без офсета — конфиг не заполнен
+
+            Vector3D toAim = new Vector3D(_aimPoint.X - wx, _aimPoint.Y - wy, _aimPoint.Z - wz);
+            Vector3D dir = toAim.Length > 1e-9 ? toAim.Normalized() : _forward;
+
+            _projectiles.Add(new Projectile
+            {
+                Pos = new Point3D(wx, wy, wz),
+                Dir = dir,
+                Life = GameConfig.Weapon.ProjectileLife
+            });
+            _proxy.AddProjectileAt(_projectiles.Count - 1,
+                wx, wy, wz, dir.X, dir.Y, dir.Z, GameConfig.Weapon.ProjectileSize);
+
+            _ammo--;
+            _fireCooldown = GameConfig.Weapon.FireCooldown;
+            ShotFired?.Invoke();
+            return true;
+        }
+
+        // Полёт снарядов — КАЖДЫЙ КАДР, а не на логическом тике: скорость высока,
+        // 20 Гц дали бы рваный след и «проскакивание» мимо мины. Коллизия — по
+        // фактическому положению, тот же допуск «почти коснулся», что у головы.
+        private void TickProjectiles(double dt)
+        {
+            if (_projectiles.Count == 0) return;
+
+            double speed = GameConfig.Weapon.ProjectileSpeed;
+            double half = _arenaSize / 2.0;
+
+            for (int i = _projectiles.Count - 1; i >= 0; i--)
+            {
+                Projectile pr = _projectiles[i];
+                pr.Pos += pr.Dir * (speed * dt);
+                pr.Life -= dt;
+
+                bool dead = pr.Life <= 0 ||
+                            Math.Abs(pr.Pos.X) > half ||
+                            Math.Abs(pr.Pos.Y) > half ||
+                            Math.Abs(pr.Pos.Z) > half;
+
+                if (!dead)
+                {
+                    // Мину можно сбить: радиус снаряда + радиус мины + допуск кадра
+                    for (int m = _mines.Count - 1; m >= 0; m--)
+                    {
+                        if (Distance(pr.Pos, _mines[m]) <= GameConfig.Weapon.ProjectileRadius + _foodRadius + 0.8)
+                        {
+                            _proxy.RemoveMineAt(m);
+                            _mines.RemoveAt(m);
+                            EnsureMines();          // арена восстанавливает мины, как при столкновении
+                            MineDestroyed?.Invoke();
+                            dead = true;
+                            break;
+                        }
+                    }
+                }
+
+                if (dead)
+                {
+                    _proxy.RemoveProjectileAt(i);
+                    _projectiles.RemoveAt(i);
+                }
+                else
+                {
+                    _proxy.MoveProjectile(i, pr.Pos.X, pr.Pos.Y, pr.Pos.Z);
+                }
+            }
+        }
+
         // ═══════════════════════════════════════════════════════════════════
         // БЛОК 11. ФИНАЛ ПАРТИИ И УТИЛИТЫ
         // ═══════════════════════════════════════════════════════════════════
@@ -1383,6 +1697,7 @@ namespace Snake3D
         {
             IsGameOver = true;
             IsRunning = false;
+            _pendingMineSpawns = 0;
             GameOver?.Invoke(this, EventArgs.Empty);
         }
 

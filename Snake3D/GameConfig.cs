@@ -24,6 +24,7 @@ namespace Snake3D
         public const double StepLength = 1.0;
         public const double BaseStepsPerSecond = 15.0;
         public const int MinesPerCristal = 3;
+        public const double SuperCrystalRadius = 1.2;
 
 
         public static class Ship
@@ -38,6 +39,18 @@ namespace Snake3D
                 public double[][] Fit = Array.Empty<double[]>();      // dx,dy,dz, yaw,pitch,roll
                 public double[][] Color = Array.Empty<double[]>();    // r,g,b на часть
                 public string[] Material = Array.Empty<string>();
+
+                // Пушки: та же схема, что у корпуса — «часть корабля».
+                // Одна или две — решает длина GunPaths (1 или 2).
+                // Пушки грузятся ПОСЛЕ CenterShipAssembly: центрируется только
+                // корпус (HullId..HullId+Paths.Length-1), пушки не попадают
+                // в общий bbox сборки.
+                public string[] GunPaths = Array.Empty<string>();
+                public double GunScale = 1.0;
+                public double[][] GunFit = Array.Empty<double[]>();       // dx,dy,dz, yaw,pitch,roll — в системе КОРАБЛЯ
+                public double[][] GunColor = Array.Empty<double[]>();     // r,g,b на ствол
+                public string[] GunMaterial = Array.Empty<string>();
+                public double[][] MuzzleOffset = Array.Empty<double[]>(); // dx,dy,dz — в системе ПУШКИ (точка вылета)
             }
 
             public static readonly Variant[] Variants =
@@ -65,7 +78,29 @@ namespace Snake3D
                         new double[] { 1.00, 0.20, 0.15 },
                     },
                     Material = new[] { "STEEL", "SHINY_PLASTIC", "SHINY_PLASTIC" },
+
+                    // Одна пушка под фюзеляжем — пример варианта «один ствол».
+                    // Длина всех Gun* массивов должна совпадать с GunPaths (здесь = 1).
+                    GunPaths = new[]
+                    {
+                        @"models\Shuttle_0\Gun_0.stp",
+                    },
+                    GunScale = 0.65,
+                    GunFit = new[]
+                    {
+                        new double[] { 0, 0, -0.075, 0, 0, -90 },
+                    },
+                    GunColor = new[]
+                    {
+                        new double[] { 0.55, 0.55, 0.58 },
+                    },
+                    GunMaterial = new[] { "CHROME" },
+                    MuzzleOffset = new[]
+                    {
+                        new double[] { 0, 1.00, 0 },
+                    },
                 },
+                
                 new Variant
                 {
                     Name = "Шаттл Mодель-1",
@@ -90,6 +125,32 @@ namespace Snake3D
                         new double[] { 0.95, 0.75, 0.10 },
                     },
                     Material = new[] { "STEEL", "CHROME", "SHINY_PLASTIC" },
+
+                    // Две пушки по бортам. Подгонка и дуло — стартовые
+                    // значения «на глаз», точная подгонка — в космопорте
+                    // (SetPartPlacement/SetMuzzleOffset читают эти же массивы).
+                    GunPaths = new[]
+                    {
+                        @"models\Shuttle_1\Gun_0.stp",
+                        @"models\Shuttle_1\Gun_1.stp",
+                    },
+                    GunScale = 0.65,
+                    GunFit = new[]
+                    {
+                        new double[] { -0.65, 0.25, -0.075, 0, 90, 0 },   // левая
+                        new double[] { 0.65, 0.25, -0.075, 0, 90, 0 },   // правая
+                    },
+                    GunColor = new[]
+                    {
+                        new double[] { 0.35, 0.38, 0.42 },
+                        new double[] { 0.35, 0.38, 0.42 },
+                    },
+                    GunMaterial = new[] { "STEEL", "STEEL" },
+                    MuzzleOffset = new[]
+                    {
+                        new double[] { -0.65, 0.5, 0 },   // кончик ствола: вперёд по локальной Y пушки
+                        new double[] { 0.65, 0.5, 0 },
+                    },
                 },
             };
 
@@ -102,13 +163,57 @@ namespace Snake3D
             public static double[] TailColor = { 0.45, 0.95, 0.45 };
         }
 
+        // Оружие: пикап, магазин, снаряды, дула.
+        // Цикл пикапа повторяет щит и буст; снаряды — плазменные заряды,
+        // процедурный «болт» в прокси (STEP-модель необязательна).
+        public static class Weapon
+        {
+            // id моделей в _models прокси: 11/12 — стволы, 13 — снаряд, 14 — пикап
+            public const int GunIdBase = 11;
+            public const int ProjectileModelId = 13;
+            public const int WeaponModelId = 14;
+            public const int PickupModelId = 15;
+
+            public const int TriggerCount = 10;             // кристаллов до появления пикапа
+            public const double LifeTime = 30.0;            // пикап живёт на поле, сек
+            public const int ShotsPerPickup = 10;            // снарядов за один пикап
+            public const double FireCooldown = 0.25;        // пауза между выстрелами, сек
+            public const double ProjectileSpeed = 60.0;     
+            public const double ProjectileLife = 3.0;       // секунд полёта
+            public const double ProjectileSize = 0.25;
+            public const double ProjectileRadius = 0.75;     // радиус коллизии снаряда
+            public const double FallbackRadius = 1.0;       // радиус fallback-сферы и ореола пикапа
+            public const double AimDistance = 30.0;         // дефолтная точка прицела впереди по курсу
+
+            // Стволы текущего корабля: один или два — решает вариант.
+            // Property, а не const: число стволов известно только через Cur.
+            public static int[] GunIds
+            {
+                get
+                {
+                    int n = Ship.Cur.GunPaths.Length;
+                    var ids = new int[n];
+                    for (int i = 0; i < n; i++) ids[i] = GunIdBase + i;
+                    return ids;
+                }
+            }
+
+            // Цвет снаряда — пишет кастомайзер (как TailColor у хвоста)
+            public static double[] ProjectileColor = { 1.00, 0.72, 0.20 };
+
+            // Модели необязательны: без файла прокси строит процедурный
+            // болт (ядро + след) и fallback-сферу пикапа
+            public const string ProjectileModelPath = @"models\Projectile.stp";
+            public const string WeaponModelPath = @"models\WeaponPickup.stp";
+        }
+
         public static class Shield
         {
-            public const int ModelId = 9;                    // id модели щита в _models прокси
+            public const int ModelId = 9;                       // id модели щита в _models прокси
             public const string Path = @"models\Shield.stp";
             public const double Size = 2.0;                     // габарит модели щита в единицах арены
             public const double FallbackRadius = 1.2;           // радиус для fallback-сферы и ореола
-            public const int TriggerCount = 20;              // съеденных кристаллов до появления щита
+            public const int TriggerCount = 20;                 // съеденных кристаллов до появления щита
             public const double LifeTime = 60.0;                // сколько щит ждёт на арене, сек
             public const double ProtectionTime = 30.0;          // защита от мин после подбора, сек
             public const double ShipHaloRadius = 2.2;           // радиус ореола вокруг корабля

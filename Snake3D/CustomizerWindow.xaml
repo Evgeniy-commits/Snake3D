@@ -176,7 +176,7 @@
 				<ComboBox x:Name="ShipList" Style="{StaticResource DarkCombo}"/>
 
 				<TextBlock Text="Элемент" Style="{StaticResource Label}" Margin="0,0,0,6"/>
-				<ListBox x:Name="PartsList" Height="150"
+				<ListBox x:Name="PartsList" Height="200"
                          Style="{StaticResource DarkList}"
                          ItemContainerStyle="{StaticResource DarkListItem}"
                          SelectionChanged="PartsList_SelectionChanged"/>

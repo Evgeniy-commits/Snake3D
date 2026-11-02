@@ -7,6 +7,7 @@ namespace Snake3D
     public class ShipSave
     {
         public double[][] Color { get; set; } = Array.Empty<double[]>();
+        public double[][]? GunColor { get; set; } = Array.Empty<double[]>();
     }
 
     //Позиции галочек и ползунов в опциях
@@ -34,5 +35,7 @@ namespace Snake3D
         public double[] TailColor { get; set; } = { 0.45, 0.95, 0.45 };
         public List<ShipSave> Ships { get; set; } = new();
         public MenuOption Options { get; set; } = new();
+        public double[]? ProjectileColor { get; set; }
+        public double[][]? GunColor { get; set; }
     }
 }

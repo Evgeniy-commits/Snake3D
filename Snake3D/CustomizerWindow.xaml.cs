@@ -76,6 +76,8 @@ namespace Snake3D
             PartsList.Items.Add("Кабина");
             PartsList.Items.Add("Двигатель");
             PartsList.Items.Add("Хвост");
+            PartsList.Items.Add("Пушки");
+            PartsList.Items.Add("Снаряд");
             PartsList.SelectedIndex = 0;
 
             InitMarkers();
@@ -111,6 +113,23 @@ namespace Snake3D
                 p.AddShipPart(id);
                 var c = ship.Color[i];
                 p.SetPartColor(id, c[0], c[1], c[2], ship.Material[i]);
+            }
+
+            // Пушки: ПОСЛЕ CenterShipAssembly — их bbox не должен попасть
+            // в общий центр сборки, иначе корабль поедет
+            for (int i = 0; i < ship.GunPaths.Length; i++)
+            {
+                int id = GameConfig.Weapon.GunIdBase + i;
+                if (!p.LoadShipPart(ship.GunPaths[i], id, ship.GunScale))
+                {
+                    System.Diagnostics.Trace.WriteLine($"Пушка {ship.GunPaths[i]} не загрузилась — пропускаем");
+                    continue;
+                }
+                var f = ship.GunFit[i];
+                p.SetPartPlacement(id, f[0], f[1], f[2], f[3], f[4], f[5]);
+                p.AddShipPart(id);
+                var c = ship.GunColor[i];
+                p.SetPartColor(id, c[0], c[1], c[2], ship.GunMaterial[i]);
             }
         }
 
@@ -297,9 +316,17 @@ namespace Snake3D
         private void ShowCurrentColor()
         {
             double r, g, b;
-            if (_selectedPart == 3)
+            if (_selectedPart == 3)          // хвост — общий для всех кораблей
             {
                 var t = GameConfig.Ship.TailColor; r = t[0]; g = t[1]; b = t[2];
+            }
+            else if (_selectedPart == 4)     // пушки: обе красятся одним цветом
+            {
+                var c = GameConfig.Ship.Cur.GunColor[0]; r = c[0]; g = c[1]; b = c[2];
+            }
+            else if (_selectedPart == 5)     // снаряд — свойство оружия, не корабля
+            {
+                var t = GameConfig.Weapon.ProjectileColor; r = t[0]; g = t[1]; b = t[2];
             }
             else
             {
@@ -324,6 +351,24 @@ namespace Snake3D
                 p.SetTailColor(r, g, b);
                 for (int i = 1; i <= TailCount; i++)
                     p.SetSegmentColor(i, r, g, b);
+            }
+            else if (_selectedPart == 4)   // пушки: обе ствола сразу
+            {
+                var ship = GameConfig.Ship.Cur;
+                for (int i = 0; i < ship.GunPaths.Length; i++)
+                {
+                    ship.GunColor[i][0] = r;
+                    ship.GunColor[i][1] = g;
+                    ship.GunColor[i][2] = b;
+                    p.SetPartColor(GameConfig.Weapon.GunIdBase + i, r, g, b, ship.GunMaterial[i]);
+                }
+            }
+            else if (_selectedPart == 5)   // снаряд: цвет плазмы для всех кораблей
+            {
+                GameConfig.Weapon.ProjectileColor[0] = r;
+                GameConfig.Weapon.ProjectileColor[1] = g;
+                GameConfig.Weapon.ProjectileColor[2] = b;
+                p.SetProjectileColor(r, g, b);
             }
             else
             {
