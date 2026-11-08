@@ -16,14 +16,14 @@ namespace Snake3D
         public const double SegmentRadius = 0.5;
         public const double FoodRadius = 0.8;
         public const double BaseLogicInterval = 0.05;
-        public const int DefaultCrystalCount = 3;
-        public const int MaxCrystalCount = 1000;
-        public const int DefaultMineCount = 10;
-        public const int MaxMineCount = 1000;
+        public const int    DefaultCrystalCount = 3;
+        public const int    MaxCrystalCount = 1000;
+        public const int    DefaultMineCount = 10;
+        public const int    MaxMineCount = 1000;
         public const double BaseCellsPerSecond = 12.5;
         public const double StepLength = 1.0;
         public const double BaseStepsPerSecond = 15.0;
-        public const int MinesPerCristal = 3;
+        public const int    MinesPerCristal = 3;
         public const double SuperCrystalRadius = 1.2;
 
 
@@ -148,8 +148,8 @@ namespace Snake3D
                     GunMaterial = new[] { "STEEL", "STEEL" },
                     MuzzleOffset = new[]
                     {
-                        new double[] { -0.65, 0.5, 0 },   // кончик ствола: вперёд по локальной Y пушки
-                        new double[] { 0.65, 0.5, 0 },
+                        new double[] { -0.025, 0.0, -0.95 },   // кончик ствола: вперёд по локальной Y пушки
+                        new double[] { 0.025, 0.0, -0.95 },
                     },
                 },
             };
@@ -174,9 +174,9 @@ namespace Snake3D
             public const int WeaponModelId = 14;
             public const int PickupModelId = 15;
 
-            public const int TriggerCount = 10;             // кристаллов до появления пикапа
+            public const int    TriggerCount = 8;             // кристаллов до появления пикапа
             public const double LifeTime = 30.0;            // пикап живёт на поле, сек
-            public const int ShotsPerPickup = 10;            // снарядов за один пикап
+            public const int    ShotsPerPickup = 10;            // снарядов за один пикап
             public const double FireCooldown = 0.25;        // пауза между выстрелами, сек
             public const double ProjectileSpeed = 60.0;     
             public const double ProjectileLife = 3.0;       // секунд полёта
@@ -184,6 +184,7 @@ namespace Snake3D
             public const double ProjectileRadius = 0.75;     // радиус коллизии снаряда
             public const double FallbackRadius = 1.0;       // радиус fallback-сферы и ореола пикапа
             public const double AimDistance = 30.0;         // дефолтная точка прицела впереди по курсу
+            public const double ProjectileVisualScale = 0.5;
 
             // Стволы текущего корабля: один или два — решает вариант.
             // Property, а не const: число стволов известно только через Cur.
@@ -209,11 +210,11 @@ namespace Snake3D
 
         public static class Shield
         {
-            public const int ModelId = 9;                       // id модели щита в _models прокси
+            public const int    ModelId = 9;                       // id модели щита в _models прокси
             public const string Path = @"models\Shield.stp";
             public const double Size = 2.0;                     // габарит модели щита в единицах арены
             public const double FallbackRadius = 1.2;           // радиус для fallback-сферы и ореола
-            public const int TriggerCount = 20;                 // съеденных кристаллов до появления щита
+            public const int    TriggerCount = 20;                 // съеденных кристаллов до появления щита
             public const double LifeTime = 60.0;                // сколько щит ждёт на арене, сек
             public const double ProtectionTime = 30.0;          // защита от мин после подбора, сек
             public const double ShipHaloRadius = 2.2;           // радиус ореола вокруг корабля
@@ -221,15 +222,71 @@ namespace Snake3D
 
         public static class Boost
         {
-            public const int ModelId = 10;                      // id модели щита в _models прокси
+            public const int    ModelId = 10;                      // id модели щита в _models прокси
             public const string Path = @"models\Boost.stp";
             public const double Size = 2.0;                     // габарит модели ускорения в единицах арены
             public const double FallbackRadius = 1.4;           // радиус для fallback-сферы и ореола
-            public const int TriggerCount = 15;                 // съеденных кристаллов до появления ускорения
+            public const int    TriggerCount = 15;                 // съеденных кристаллов до появления ускорения
             public const double LifeTime = 60.0;                // сколько ускорение ждёт на арене, сек
             public const double BoostTime = 30.0;               // ускорение после подбора, сек
             public const double SpeedMultiplier = 1.5;          // множитель скорости
             public const double ShipHaloRadius = 2.5;           // радиус ореола вокруг корабля
+        }
+
+        // Боты 
+        // Тело бота повторяет игрока: тот же шаг (StepLength), тот же тик,
+        // тот же темп поворота. Отличается только «мозг».
+        public static class Bot
+        {
+            public const int Count = 3;
+            public const int BaseLength = 5;
+            public const int MaxLength = 30;
+            public const int LookaheadSteps = 10;
+            public const double TurnDegPerSecond = 135.0;
+            public const double RespawnDelay = 3.0;
+            public const double MinSpawnDistance = 40.0;
+            public const int KillScore = 100;
+
+            // Хитбокс для снарядов: уязвимы только первые N сегментов
+            // (голова + 4). Хвост — «броня», как ты и просил. Правило
+            // симметричное: действует и на игрока.
+            public const int VulnerableSegments = 5;
+
+            // Оружие ботов
+            public const int AmmoPerPickup = 10;      // снарядов за подобранный пикап
+            public const double FireCooldown = 1.0;   // пауза между выстрелами (у игрока 0.25)
+            public const double FireRange = 45.0;     // с какой дистанции бот открывает огонь
+            public const double AimConeDot = 0.90;    // конус ~25°: стреляет только примерно по курсу
+            public const double AimError = 2.0;       // разброс прицеливания, единиц арены
+            public const double MuzzleAhead = 1.2;    // точка вылета снаряда впереди головы
+
+            // Корабль ботов: всегда Shuttle_0 (Variants[0]), под своими id.
+            // 60..63 — бот 0, 70..73 — бот 1 и т.д. (3 части + 1 пушка)
+            public const int ShipModelIdBase = 60;
+            public const int ShipIdStride = 10;
+
+            public const int SegmentIdBase = 10000;
+            public const int IdStride = 512;
+
+            public static readonly string[] Names = { "Viper", "Raptor", "Cobra" };
+
+            // Палитра случайных цветов ботов (r,g,b в 0..1)
+            public static readonly double[][] Colors =
+            {
+                new[] { 1.00, 0.30, 0.20 },
+                new[] { 0.20, 0.55, 1.00 },
+                new[] { 1.00, 0.80, 0.10 },
+                new[] { 0.30, 0.90, 0.60 },
+                new[] { 0.85, 0.30, 0.90 },
+                new[] { 1.00, 0.55, 0.10 },
+            };
+        }
+        
+        // Здоровье игрока
+        public static class Health
+        {
+            public const int MaxHits = 5;
+            public const double InvulnTime = 0.5;
         }
     }
 }

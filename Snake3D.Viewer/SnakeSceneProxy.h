@@ -64,6 +64,8 @@
 #include <V3d_AmbientLight.hxx>
 #include <V3d_DirectionalLight.hxx>
 
+#include <chrono>
+
 //Строим звезды
 #include <BRep_Builder.hxx>
 #include <TopoDS_Compound.hxx>
@@ -111,6 +113,11 @@
 
 using namespace System;
 using namespace System::Runtime::InteropServices;
+
+namespace
+{
+	int CountAlive(const std::vector<Handle(AIS_Shape)>* v);   // forward declaration
+}
 
 namespace Snake3DViewer
 {
@@ -167,6 +174,10 @@ namespace Snake3DViewer
 		std::vector<gp_Pnt>* _basePositions;
 		std::vector<gp_Pnt>* _positions;
 		std::vector<gp_Vec>* _segmentDirs;
+		std::vector<gp_Pnt>* _segApplied;      // последняя реально применённая позиция
+		double _segAppliedSpin = -1e9;
+		double _headAppliedX = 1e9, _headAppliedY = 1e9, _headAppliedZ = 1e9;
+		double _headAppliedDirX = 1e9, _headAppliedDirY = 1e9, _headAppliedDirZ = 1e9;
 
 		//Для STEP
 		TopoDS_Shape* _headModel;
@@ -211,6 +222,7 @@ namespace Snake3DViewer
 		// ── 2.9 Мины ──
 		std::vector<Handle(AIS_Shape)>* _mines;
 		std::vector<gp_Pnt>* _mineBase;
+		std::vector<Handle(AIS_Shape)>* _mineFree;   // пул переиспользуемых мин
 
 		// ── 2.10 Загруженные STEP-модели (индексы kind) ──
 		std::vector<TopoDS_Shape*>* _models;            // 0=голова, 1=хвост, 2=кристалл, 4=мина
@@ -229,8 +241,17 @@ namespace Snake3DViewer
 
 		// ── 2.12 Анимация ──
 		double _spinAngle = 0.0;
-		static constexpr double SpinSpeed = 3.0;		
+		int _spinFrame = 0;							// счётчик кадров: порционное обновление кристаллов
+		static constexpr double SpinSpeed = 3.0;
 
+		// Диагностика: сколько SetLocalTransformation выполнено за секунду, по категориям
+		int _dbgTrsfCrystal = 0;
+		int _dbgTrsfMine = 0;
+		int _dbgTrsfSeg = 0;
+		int _dbgTrsfOther = 0;
+		int _frameDirty = 0;   // счётчик изменений сцены за кадр
+		System::DateTime _dbgTrsfLast = System::DateTime::UtcNow;
+		
 		// ── 2.13 Снаряды, дула пушек, прицел, пикап оружия ──
 		// Снаряды: плотные векторы — C# владеет индексами, RemoveProjectileAt
 		// делает erase, как у кристаллов и мин. Позиции храним сами:
@@ -249,6 +270,7 @@ namespace Snake3DViewer
 		// Это конфиг, а не объекты сцены: ClearScene его НЕ трогает —
 		// как _fitTrsf, он выставляется один раз из конструктора игры.
 		std::map<int, gp_XYZ>* _muzzleLocal;
+		std::map<int, double>* _gunScale;
 
 		// Прицел: одно кольцо на арене, ставится и гоняется кадром.
 		// Кэш-схема как у ореола корабля: один объект, только трансформация.
@@ -281,6 +303,7 @@ namespace Snake3DViewer
 			_stars = new std::vector<Handle(AIS_Shape)>();
 			_basePositions = new std::vector<gp_Pnt>();
 			_positions = new std::vector<gp_Pnt>();
+			_segApplied = new std::vector<gp_Pnt>();
 			_crystals = new std::vector<Handle(AIS_Shape)>();
 			_crystalBase = new std::vector<gp_Pnt>();
 			_superCrystals = new std::vector<Handle(AIS_Shape)>();
@@ -288,6 +311,7 @@ namespace Snake3DViewer
 			_superBase = new std::vector<gp_Pnt>();
 			_mines = new std::vector<Handle(AIS_Shape)>();
 			_mineBase = new std::vector<gp_Pnt>();
+			_mineFree = new std::vector<Handle(AIS_Shape)>();
 			_models = new std::vector<TopoDS_Shape*>();
 			_segmentDirs = new std::vector<gp_Vec>();
 
@@ -313,6 +337,7 @@ namespace Snake3DViewer
 			_projectilePos = new std::vector<gp_Pnt>();
 			_projectileDirs = new std::vector<gp_Vec>();
 			_muzzleLocal = new std::map<int, gp_XYZ>();
+			_gunScale = new std::map<int, double>();
 			_weapons = new std::vector<Handle(AIS_Shape)>();
 			_weaponBase = new std::vector<gp_Pnt>();
 			_weaponShells = new std::vector<Handle(AIS_Shape)>();
@@ -345,6 +370,7 @@ namespace Snake3DViewer
 			delete _stars;   _stars = nullptr;
 			delete _basePositions; _basePositions = nullptr;
 			delete _positions; _positions = nullptr;
+			delete _segApplied; _segApplied = nullptr;
 
 			delete _headModel; _headModel = nullptr;
 
@@ -367,6 +393,7 @@ namespace Snake3DViewer
 			delete _superBase;	   _superBase = nullptr;
 			delete _mines;         _mines = nullptr;
 			delete _mineBase;      _mineBase = nullptr;
+			delete _mineFree;      _mineFree = nullptr;
 			delete _segmentDirs;   _segmentDirs = nullptr;
 			delete _shipParts;	   _shipParts = nullptr;
 			delete _fitTrsf;	   _fitTrsf = nullptr;
@@ -375,6 +402,7 @@ namespace Snake3DViewer
 			delete _projectilePos;  _projectilePos = nullptr;
 			delete _projectileDirs; _projectileDirs = nullptr;
 			delete _muzzleLocal;    _muzzleLocal = nullptr;
+			delete _gunScale;		_gunScale = nullptr;
 			delete _weapons;        _weapons = nullptr;
 			delete _weaponBase;     _weaponBase = nullptr;
 			delete _weaponShells;   _weaponShells = nullptr;
@@ -389,6 +417,7 @@ namespace Snake3DViewer
 			delete _stars;   _stars = nullptr;
 			delete _basePositions; _basePositions = nullptr;
 			delete _positions; _positions = nullptr;
+			delete _segApplied; _segApplied = nullptr;
 
 			delete _headModel; _headModel = nullptr;
 
@@ -411,6 +440,7 @@ namespace Snake3DViewer
 			delete _superBase;	   _superBase = nullptr;
 			delete _mines;         _mines = nullptr;
 			delete _mineBase;      _mineBase = nullptr;
+			delete _mineFree;      _mineFree = nullptr;
 			delete _segmentDirs;   _segmentDirs = nullptr;
 			delete _shipParts;	   _shipParts = nullptr;
 			delete _fitTrsf;	   _fitTrsf = nullptr;
@@ -419,6 +449,7 @@ namespace Snake3DViewer
 			delete _projectilePos;  _projectilePos = nullptr;
 			delete _projectileDirs; _projectileDirs = nullptr;
 			delete _muzzleLocal;    _muzzleLocal = nullptr;
+			delete _gunScale;		_gunScale = nullptr;
 			delete _weapons;        _weapons = nullptr;
 			delete _weaponBase;     _weaponBase = nullptr;
 			delete _weaponShells;   _weaponShells = nullptr;
@@ -522,6 +553,8 @@ namespace Snake3DViewer
 			while ((int)_models->size() <= id) _models->push_back(nullptr);
 			delete (*_models)[id];
 			(*_models)[id] = new TopoDS_Shape(shaped);
+
+			(*_gunScale)[id] = uniformScale;
 			return true;
 		}
 
@@ -623,8 +656,6 @@ namespace Snake3DViewer
 				_graphicDriver() = new OpenGl_GraphicDriver(dispCon);  //Рендер OpenGL
 
 				_viewer() = new V3d_Viewer(_graphicDriver());          //Сцена
-				//_viewer()->SetDefaultLights();                         //Свет
-				//_viewer()->SetLightOn();
 				// Свет: headlight + солнце + заполняющий
 				_viewer()->SetDefaultLights();
 				_viewer()->SetLightOn();
@@ -661,11 +692,8 @@ namespace Snake3DViewer
 				//отображаемые объекты, их цвета, режимы, выделение.
 				//Именно через него идут все Display / Erase / Redisplay.
 				_aisContext() = new AIS_InteractiveContext(_viewer());
-				//_aisContext()->UpdateCurrentViewer();
-
-				//_view()->MustBeResized();
-				//_view()->Redraw();
-
+				
+				
 				// Настройка камеры: перспективная проекция, угол обзора 45 градусов
 				_view()->Camera()->SetProjectionType(Graphic3d_Camera::Projection_Perspective);
 				_view()->Camera()->SetFOVy(45.0);
@@ -674,7 +702,7 @@ namespace Snake3DViewer
 				_view()->SetProj(V3d_XposYposZpos);
 
 				_view()->MustBeResized();
-				_view()->Redraw();
+				_view()->RedrawImmediate();
 			}
 			catch (Standard_Failure& e)
 			{
@@ -755,21 +783,43 @@ namespace Snake3DViewer
 
 			if (!_aisContext().IsNull())
 				_aisContext()->UpdateCurrentViewer();
+			_frameDirty++;
 		}
 
 		// ═══════════════════════════════════════════════════════════════
 		// БЛОК 6. ЗМЕЙКА: сегменты, голова, движение
 		// ═══════════════════════════════════════════════════════════════
-
 		void AddSegment(double x, double y, double z, double radius, int index)
 		{
 			//Фолбэки обязательны : aisShape не должен остаться пустым(Handle без объекта)
 			//— иначе _aisContext()->Display(aisShape) упадёт.
 
 			//Паттерн для фолбэков и моделей один и тот же : строится геометрия → 
-			//оборачивается в AIS_Shape → SetDisplayMode(1) (заливка) → цвет → пуш 
-			//в вектор → Display в контексте.
+			//оборачивается в AIS_Shape → SetMode(1) (заливка) → цвет → пуш 
+			//в вектор →  в контексте.
+
+			static const Quantity_Color headColor(0.42, 0.44, 0.48, Quantity_TOC_RGB);
+			static const Quantity_Color fallbackHeadColor(Quantity_NOC_RED);
+			static const Quantity_Color tailColor(_tailR, _tailG, _tailB, Quantity_TOC_RGB);
+
 			gp_Pnt center(x, y, z);
+
+			// Резерв пустых слотов до index: боты живут на индексах 10000+,
+			// между игроком и ботами вектор наращивается нулевыми Handle.
+			// Нулевой Handle почти бесплатен, а индексы при этом никогда не сдвигаются.
+			if (index >= static_cast<int>(_snakeSegments->size()))
+			{
+				int need = index + 1 - static_cast<int>(_snakeSegments->size());
+				for (int k = 0; k < need; ++k)
+				{
+					_snakeSegments->push_back(Handle(AIS_Shape)());
+					_basePositions->push_back(gp_Pnt(0, 0, 0));
+					_positions->push_back(gp_Pnt(0, 0, 0));
+					_segmentDirs->push_back(gp_Vec(0, 1, 0));
+					_segApplied->push_back(gp_Pnt(1e18, 1e18, 1e18));   // для резерва/роста					
+				}
+			}
+
 			Handle(AIS_Shape) aisShape;
 			gp_Pnt basePos = center;   // база по умолчанию — точка построения
 
@@ -783,13 +833,14 @@ namespace Snake3DViewer
 					_basePositions->push_back(center);
 					_positions->push_back(center);
 					_segmentDirs->push_back(gp_Vec(0, 1, 0));
+					_segApplied->push_back(gp_Pnt(1e18, 1e18, 1e18));   // для резерва/роста					   
 					return;
 				}
 				if (_headModel != nullptr)
 				{
 					// Голова — загруженная .step-модель
 					aisShape = new AIS_Shape(*_headModel);
-					aisShape->SetColor(Quantity_Color(0.42, 0.44, 0.48, Quantity_TOC_RGB));
+					aisShape->SetColor(headColor);
 					basePos = gp_Pnt(0, 0, 0);   // модель центрирована в нуле — вращение вокруг него
 				}
 				else
@@ -806,7 +857,7 @@ namespace Snake3DViewer
 					{
 						BRepPrimAPI_MakeSphere fallback(center, radius);
 						aisShape = new AIS_Shape(fallback.Shape());
-						aisShape->SetColor(Quantity_Color(Quantity_NOC_RED));
+						aisShape->SetColor(Quantity_Color(fallbackHeadColor));
 					}
 					else
 					{
@@ -823,7 +874,7 @@ namespace Snake3DViewer
 				if (tailModel != nullptr)
 				{
 					aisShape = new AIS_Shape(*tailModel);
-					aisShape->SetColor(Quantity_Color(_tailR, _tailG, _tailB, Quantity_TOC_RGB));
+					aisShape->SetColor(tailColor);
 					aisShape->SetTransparency(0.0);
 					basePos = gp_Pnt(0, 0, 0);
 
@@ -837,19 +888,49 @@ namespace Snake3DViewer
 					// Фолбэк — синяя сфера (обязателен: aisShape не должен остаться пустым)
 					BRepPrimAPI_MakeSphere sphere(center, radius);
 					aisShape = new AIS_Shape(sphere.Shape());
-					aisShape->SetColor(Quantity_Color(_tailR, _tailG, _tailB, Quantity_TOC_RGB));
+					aisShape->SetColor(tailColor);
 					aisShape->SetTransparency(0.0);
 				}
 			}
 
 			aisShape->SetDisplayMode(1);
-			_snakeSegments->push_back(aisShape);
-			_basePositions->push_back(basePos);
-			_positions->push_back(center);
-			_segmentDirs->push_back(gp_Vec(0, 1, 0));
-			_aisContext()->Display(aisShape, Standard_True);
-		}
+			
+			if (index < static_cast<int>(_snakeSegments->size()) && (*_snakeSegments)[index].IsNull())
+			{
+				// Переиспользование пустого слота: сегмент удалили (смерть бота),
+				// а бот возродился или игрок вырос — пишем ровно в свой индекс
+				(*_snakeSegments)[index] = aisShape;
+				(*_basePositions)[index] = basePos;
+				(*_positions)[index] = center;
+				(*_segmentDirs)[index] = gp_Vec(0, 1, 0);
+				(*_segApplied)[index] = gp_Pnt(1e18, 1e18, 1e18);
+			}
+			else if (index == static_cast<int>(_snakeSegments->size()))
+			{
+				// Обычный рост вектора — поведение игрока, как и было
+				_snakeSegments->push_back(aisShape);
+				_basePositions->push_back(basePos);
+				_positions->push_back(center);
+				_segmentDirs->push_back(gp_Vec(0, 1, 0));
+				_segApplied->push_back(gp_Pnt(1e18, 1e18, 1e18));
+			}
+			else
+			{
+				// Слот занят живым сегментом — перезаписываем со стиранием старого
+				if (!_aisContext().IsNull() && !(*_snakeSegments)[index].IsNull())
+					_aisContext()->Erase((*_snakeSegments)[index], Standard_False);
+				(*_snakeSegments)[index] = aisShape;
+				(*_basePositions)[index] = basePos;
+				(*_positions)[index] = center;
+				(*_segmentDirs)[index] = gp_Vec(0, 1, 0);
+				(*_segApplied)[index] = gp_Pnt(1e18, 1e18, 1e18);
+				_frameDirty++;
+			}
 
+			_frameDirty++;
+			_aisContext()->Display(aisShape, Standard_False);
+		}
+		
 		void HideSegment(int index)
 		{
 			if (index < 0 || _snakeSegments == nullptr) return;
@@ -857,17 +938,38 @@ namespace Snake3DViewer
 			if ((*_snakeSegments)[index].IsNull()) return;
 			if (!_aisContext().IsNull())
 				_aisContext()->Erase((*_snakeSegments)[index], Standard_False);
+			_frameDirty++;
 		}
 
 		void MoveSegment(int index, double x, double y, double z)
 		{
 			if (index < 0 || index >= static_cast<int>(_snakeSegments->size())) return;
 			gp_Pnt newPos(x, y, z);
-			(*_positions)[index] = newPos;
+
+			// Позицию фиксируем даже для скрытого слота: от неё сосед
+			// считает направление цепочки (у ботов слоты 0–1 спрятаны,
+			// у игрока слот 0 — заглушка корабля). Проверка живости шейпа
+			// теперь ПОСЛЕ записи позиции — иначе сосед навсегда видит
+			// замороженную спавн-точку.
+			if (index < static_cast<int>(_positions->size()))
+				(*_positions)[index] = newPos;
+
+			if ((*_snakeSegments)[index].IsNull()) return;   // пустой слот — двигать нечего
+
+			// Guard clause: позиция и спин не менялись — шейп уже актуален.
+			// Обновляем только служебные данные и выходим, Redraw не пачкаем.
+			const gp_Pnt& applied = (*_segApplied)[index];
+			if (std::abs(newPos.X() - applied.X()) < 1e-9 &&
+				std::abs(newPos.Y() - applied.Y()) < 1e-9 &&
+				std::abs(newPos.Z() - applied.Z()) < 1e-9 &&
+				std::abs(_spinAngle - _segAppliedSpin) < 1e-9)
+				return;   // позиция уже записана выше
 
 			// Направление сегмента — на предыдущий (головной) сегмент цепочки.
 			// Сдвиг идёт от хвоста к голове, поэтому positions[index-1] уже актуален.
-			if (index > 0)
+			// Смотрим на ДАННЫЕ соседа, а не на его шейп: у бота перед первым
+			// видимым сегментом лежат спрятанные слоты — их позиции поддерживаются.
+			if (index > 0 && index - 1 < static_cast<int>(_positions->size()))
 			{
 				gp_Vec toPrev((*_positions)[index - 1], newPos);
 				if (toPrev.Magnitude() > 1e-6)
@@ -875,6 +977,15 @@ namespace Snake3DViewer
 					toPrev.Normalize();
 					(*_segmentDirs)[index] = toPrev;
 				}
+			}
+
+			// Куллинг: вне конуса камеры служебное состояние держим свежим,
+			// а трансформацию не трогаем; применённое сбрасываем в sentinel —
+			// вернувшись в кадр, сегмент мгновенно встанет в актуальную позицию.
+			if (!InView(newPos.X(), newPos.Y(), newPos.Z(), 1e9))
+			{
+				(*_segApplied)[index] = gp_Pnt(1e18, 1e18, 1e18);
+				return;
 			}
 
 			gp_Trsf trsf;
@@ -912,7 +1023,9 @@ namespace Snake3DViewer
 			}
 
 			(*_snakeSegments)[index]->SetLocalTransformation(trsf);
-			//_aisContext()->Redisplay((*_snakeSegments)[index], Standard_False);
+			(*_segApplied)[index] = newPos;
+			_segAppliedSpin = _spinAngle;
+			_dbgTrsfSeg++; _frameDirty++;
 		}
 
 		void MoveHead(int headIndex, double x, double y, double z)
@@ -921,7 +1034,16 @@ namespace Snake3DViewer
 			if ((*_snakeSegments)[headIndex].IsNull()) return;
 
 			gp_Pnt newPos(x, y, z);
-			(*_positions)[headIndex] = newPos;
+			if (std::abs(newPos.X() - _headAppliedX) < 1e-9 &&
+				std::abs(newPos.Y() - _headAppliedY) < 1e-9 &&
+				std::abs(newPos.Z() - _headAppliedZ) < 1e-9 &&
+				std::abs(_dirX - _headAppliedDirX) < 1e-9 &&
+				std::abs(_dirY - _headAppliedDirY) < 1e-9 &&
+				std::abs(_dirZ - _headAppliedDirZ) < 1e-9)
+			{
+				(*_positions)[headIndex] = newPos;   // соседям (сегменту 1) нужна свежая позиция
+				return;
+			}
 
 			gp_Dir fwd(_dirX, _dirY, _dirZ);
 			gp_Dir up(_upX, _upY, _upZ);
@@ -944,7 +1066,23 @@ namespace Snake3DViewer
 				_shipShield()->SetLocalTransformation(trsf.Multiplied(spin));
 			}
 
-			(*_snakeSegments)[headIndex]->SetLocalTransformation(trsf);			
+			(*_snakeSegments)[headIndex]->SetLocalTransformation(trsf);	
+			_headAppliedX = newPos.X(); _headAppliedY = newPos.Y(); _headAppliedZ = newPos.Z();
+			_headAppliedDirX = _dirX; _headAppliedDirY = _dirY; _headAppliedDirZ = _dirZ;
+			_dbgTrsfSeg++; _frameDirty++;
+		}
+
+		// Сегмент «удаляется» обнулением слота: элемент из вектора НЕ стирается,
+		// иначе сдвинулись бы индексы всех сегментов после него.
+		// Вызывается при смерти бота; при респауне AddSegment переиспользует слот.
+		void RemoveSegment(int index)
+		{
+			if (index < 0 || index >= static_cast<int>(_snakeSegments->size())) return;
+			if ((*_snakeSegments)[index].IsNull()) return;
+			if (!_aisContext().IsNull())
+				_aisContext()->Erase((*_snakeSegments)[index], Standard_False);
+			(*_snakeSegments)[index] = Handle(AIS_Shape)();
+			_frameDirty++;
 		}
 
 		void RemoveAllSnake()
@@ -959,8 +1097,18 @@ namespace Snake3DViewer
 			_basePositions->clear();
 			_positions->clear();
 			_segmentDirs->clear();
+			_segApplied->clear();
 			if (!_aisContext().IsNull())
 				_aisContext()->UpdateCurrentViewer();
+			_frameDirty++;
+
+			//диагностика
+			int erased = 0;
+			for (auto& seg : *_snakeSegments)
+				if (!seg.IsNull() && !_aisContext().IsNull()) { _aisContext()->Erase(seg, Standard_False); ++erased; }
+
+			System::Diagnostics::Trace::WriteLine(
+				System::String::Format("[Reset] сегментов стёрто: {0}", erased));
 		}
 
 		// ═══════════════════════════════════════════════════════════════
@@ -987,7 +1135,8 @@ namespace Snake3DViewer
 			aisShape->Attributes()->SetFaceBoundaryAspect(boundary);
 
 			_walls->push_back(aisShape);
-			_aisContext()->Display(aisShape, Standard_True);
+			_frameDirty++;
+			_aisContext()->Display(aisShape, Standard_False);
 		}
 
 		void CreateWalls(double arenaSize)
@@ -1067,6 +1216,7 @@ namespace Snake3DViewer
 				Handle(AIS_Shape) ais = new AIS_Shape(comp);
 				ais->SetDisplayMode(1);
 				ais->SetColor(Quantity_Color(cols[g][0], cols[g][1], cols[g][2], Quantity_TOC_RGB));
+				_frameDirty++;
 				_aisContext()->Display(ais, Standard_False);
 				_stars->push_back(ais);
 			}
@@ -1079,7 +1229,8 @@ namespace Snake3DViewer
 			Handle(AIS_Shape) aisEdge = new AIS_Shape(edge.Shape());
 			aisEdge->SetDisplayMode(0);
 			aisEdge->SetColor(Quantity_Color(Quantity_NOC_BLACK));
-			_aisContext()->Display(aisEdge, Standard_True);
+			_frameDirty++;
+			_aisContext()->Display(aisEdge, Standard_False);
 			_grid->push_back(aisEdge);
 		}
 
@@ -1094,7 +1245,8 @@ namespace Snake3DViewer
 			// Создаем серый цвет вручную (R=105, G=105, B=105 примерно как DIMGRAY)
 			aisEdge->SetColor(Quantity_Color(Quantity_NOC_BLUEVIOLET));
 
-			_aisContext()->Display(aisEdge, Standard_True);
+			_frameDirty++;
+			_aisContext()->Display(aisEdge, Standard_False);
 		}
 
 		void CreateGrid(double arenaSize, double step)
@@ -1135,6 +1287,7 @@ namespace Snake3DViewer
 				if (w.IsNull()) continue;
 				if (visible) _aisContext()->Display(w, Standard_False);
 				else         _aisContext()->Erase(w, Standard_False);
+				_frameDirty++;
 			}
 
 			// Сетка повторяет судьбу стен: один флаг — обе декорации.    
@@ -1144,7 +1297,7 @@ namespace Snake3DViewer
 				if (visible) _aisContext()->Display(g, Standard_False);
 				else         _aisContext()->Erase(g, Standard_False);
 			}
-
+			_frameDirty++;
 			_aisContext()->UpdateCurrentViewer();
 		}
 
@@ -1170,6 +1323,7 @@ namespace Snake3DViewer
 				if (!kv.second.IsNull())
 					_aisContext()->Erase(kv.second, Standard_False);
 			_highlights->clear();
+			_frameDirty++;
 			_aisContext()->UpdateCurrentViewer();
 		}
 
@@ -1195,6 +1349,7 @@ namespace Snake3DViewer
 					// грань уже в кэше — просто вернуть на сцену
 					if (!it->second.IsNull())
 						_aisContext()->Display(it->second, Standard_False);
+					_frameDirty++;
 					return;
 				}
 
@@ -1209,6 +1364,7 @@ namespace Snake3DViewer
 				if (!it->second.IsNull())
 					_aisContext()->Erase(it->second, Standard_False);
 				_highlights->erase(it);
+				_frameDirty++;
 				_aisContext()->UpdateCurrentViewer();
 			}
 		}
@@ -1231,6 +1387,7 @@ namespace Snake3DViewer
 			{
 				if (it != _highlights->end() && !it->second.IsNull())
 					_aisContext()->Erase(it->second, Standard_False);
+				_frameDirty++;
 				return;
 			}
 
@@ -1245,6 +1402,7 @@ namespace Snake3DViewer
 
 			ais->SetTransparency(0.85 - 0.65 * level);
 			// Display после Erase: погашенная ячейка из кэша снова на сцене
+			_frameDirty++;
 			_aisContext()->Display(ais, Standard_False);
 			//UpdateCurrentViewer здесь НЕТ — его вызывает CommitHighlights
 		}
@@ -1310,11 +1468,12 @@ namespace Snake3DViewer
 		{
 			for (auto& c : *_crystals)
 				if (!c.IsNull() && !_aisContext().IsNull())
-					_aisContext()->Erase(c, Standard_False);
+					_aisContext()->Erase(c, Standard_False);			
 			//ореол
 			for (auto& h : *_crystalHalos)
 				if (!h.IsNull() && !_aisContext().IsNull())
 					_aisContext()->Erase(h, Standard_False);
+			_frameDirty++;
 			_crystalHalos->clear();
 			_crystals->clear();
 		}
@@ -1380,6 +1539,7 @@ namespace Snake3DViewer
 			haloShape->SetLocalTransformation(trans);
 
 			// Оба дисплея отложенные; перерисовка — один раз на весь спавн
+			_frameDirty++;
 			_aisContext()->Display(haloShape, Standard_False);
 			_aisContext()->Display(aisShape, Standard_False);			
 		}
@@ -1398,19 +1558,25 @@ namespace Snake3DViewer
 				_aisContext()->Erase((*_crystalHalos)[index], Standard_False);
 			if (index < (int)_crystalHalos->size())
 				_crystalHalos->erase(_crystalHalos->begin() + index);
+			_frameDirty++;
 		}
 
 		// Ориентирует все кристаллы 
 		void UpdateCrystalOrientations()
 		{
-			if ((_crystals->empty() && _superCrystals->empty())) return;
 			if (_aisContext().IsNull()) return;
+			if (_crystals->empty() && _superCrystals->empty() &&
+				_shields->empty() && _boosts->empty() && _weapons->empty()) return;
+
+			static double s_lastSpin = -1e9;
+			if (std::abs(_spinAngle - s_lastSpin) < 1e-9) return;
+			s_lastSpin = _spinAngle;
 
 			gp_Dir fwd(_dirX, _dirY, _dirZ);
 			gp_Dir up(_upX, _upY, _upZ);
 
 			gp_Dir right(fwd.Crossed(up));
-			up = gp_Dir(right.Crossed(fwd));
+			up = gp_Dir(right.Crossed(fwd));			
 
 			// вращение вокруг вертикали (up): поворачиваем right и fwd, ось up 
 			// не трогаем
@@ -1424,26 +1590,33 @@ namespace Snake3DViewer
 				right.Z() * c - fwd.Z() * s);
 			gp_Dir fwdR(fwd.X() * c + right.X() * s,
 				fwd.Y() * c + right.Y() * s,
-				fwd.Z() * c + right.Z() * s);
+				fwd.Z() * c + right.Z() * s);			
+			
+			// Порционное вращение: каждый кадр обновляем только 1/4 кристаллов.
+			// Угол общий — проснувшийся подхватит текущий, отставание максимум кадр.
+			// Супер-кристаллы, щиты, бусты и пикапы не дробим — их единицы.
+			const int chunkCount = 4;
+			++_spinFrame;
+			int spinChunk = _spinFrame % chunkCount;
 
-			//// вращение вокруг оси полёта — заметно даже для симметричной модели
-			//double c = cos(_spinAngle), s = sin(_spinAngle);
-			//gp_Dir upR(up.X() * c - right.X() * s,
-			//    up.Y() * c - right.Y() * s,
-			//    up.Z() * c - right.Z() * s);
-			//gp_Dir rightR(right.X() * c + up.X() * s,
-			//    right.Y() * c + up.Y() * s,
-			//    right.Z() * c + up.Z() * s);
+			// Диагностика порционного вращения: сколько кристаллов обновлено за секунду.
+			// Статические локальные — обходим запрет нативных полей в managed-классе.
+			static int spinDebugCount = 0;
+			static std::chrono::steady_clock::time_point spinDebugLast = std::chrono::steady_clock::now();
+
+			auto spinNow = std::chrono::steady_clock::now();
+			double spinDt = std::chrono::duration<double>(spinNow - spinDebugLast).count();
 
 			for (size_t i = 0; i < _crystals->size(); ++i)
 			{
 				if ((*_crystals)[i].IsNull()) continue;
+				if ((int)(i % chunkCount) != spinChunk) continue;
 
 				gp_Pnt pos = (*_crystalBase)[i];
 
 				// Спящий кристалл (вне конуса камеры): матрицу не трогаем.
 				// Проснувшись, подхватит текущий _spinAngle — отставание максимум кадр.
-				if (!InView(pos.X(), pos.Y(), pos.Z(), 200.0)) continue;
+				if (!InView(pos.X(), pos.Y(), pos.Z(), 50.0)) continue;
 
 				//Метод SetValues принимает матрицу по строкам.
 				//Первые три столбца — базис локальной системы координат
@@ -1458,9 +1631,11 @@ namespace Snake3DViewer
 					rightR.Z(), fwdR.Z(), up.Z(), pos.Z());
 
 				(*_crystals)[i]->SetLocalTransformation(trsf);
+				_dbgTrsfCrystal++; _frameDirty++;
 				// Ореол: та же матрица, что у кристалла — вращается синхронно
 				if (i < _crystalHalos->size() && !(*_crystalHalos)[i].IsNull())
 					(*_crystalHalos)[i]->SetLocalTransformation(trsf);
+				++spinDebugCount;
 			}
 
 			for (size_t i = 0; i < _superCrystals->size(); ++i)
@@ -1469,7 +1644,7 @@ namespace Snake3DViewer
 
 				gp_Pnt pos = (*_superBase)[i];
 
-				if (!InView(pos.X(), pos.Y(), pos.Z(), 200.0)) continue;
+				if (!InView(pos.X(), pos.Y(), pos.Z(), 50.0)) continue;
 
 				gp_Trsf trsf;
 				trsf.SetValues(
@@ -1478,6 +1653,7 @@ namespace Snake3DViewer
 					rightR.Z(), fwdR.Z(), up.Z(), pos.Z());
 
 				(*_superCrystals)[i]->SetLocalTransformation(trsf);
+				_dbgTrsfOther++; _frameDirty++;
 			}
 
 			// Оболочки супер-кристаллов: та же матрица, что у кристалла —
@@ -1488,7 +1664,7 @@ namespace Snake3DViewer
 				if ((*_superSpheres)[i].IsNull()) continue;
 
 				gp_Pnt pos = (*_superBase)[i];
-				if (!InView(pos.X(), pos.Y(), pos.Z(), 200.0)) continue;
+				if (!InView(pos.X(), pos.Y(), pos.Z(), 50.0)) continue;
 
 				gp_Trsf trsf;
 				trsf.SetValues(
@@ -1497,6 +1673,7 @@ namespace Snake3DViewer
 					rightR.Z(), fwdR.Z(), up.Z(), pos.Z());
 
 				(*_superSpheres)[i]->SetLocalTransformation(trsf);
+				_dbgTrsfOther++; _frameDirty++;
 			}
 
 			// Щит: та же матрица, что и у кристаллов — ориентируется вместе с кораблём
@@ -1504,7 +1681,7 @@ namespace Snake3DViewer
 			{
 				if ((*_shields)[i].IsNull()) continue;
 				gp_Pnt pos = (*_shieldBase)[i];
-				if (!InView(pos.X(), pos.Y(), pos.Z(), 200.0)) continue;
+				if (!InView(pos.X(), pos.Y(), pos.Z(), 50.0)) continue;
 
 				gp_Trsf trsf;
 				trsf.SetValues(
@@ -1515,6 +1692,7 @@ namespace Snake3DViewer
 
 				if (i < _shieldShells->size() && !(*_shieldShells)[i].IsNull())
 					(*_shieldShells)[i]->SetLocalTransformation(trsf);
+				_dbgTrsfOther++; _frameDirty++;
 			}
 
 			//Ускорение
@@ -1522,7 +1700,7 @@ namespace Snake3DViewer
 			{
 				if ((*_boosts)[i].IsNull()) continue;
 				gp_Pnt pos = (*_boostBase)[i];
-				if (!InView(pos.X(), pos.Y(), pos.Z(), 200.0)) continue;
+				if (!InView(pos.X(), pos.Y(), pos.Z(), 50.0)) continue;
 
 				gp_Trsf trsf;
 				trsf.SetValues(
@@ -1533,6 +1711,7 @@ namespace Snake3DViewer
 
 				if (i < _boostShells->size() && !(*_boostShells)[i].IsNull())
 					(*_boostShells)[i]->SetLocalTransformation(trsf);
+				_dbgTrsfOther++; _frameDirty++;
 			}
 
 			// Пикап оружия: та же матрица, что у кристаллов
@@ -1540,7 +1719,7 @@ namespace Snake3DViewer
 			{
 				if ((*_weapons)[i].IsNull()) continue;
 				gp_Pnt pos = (*_weaponBase)[i];
-				if (!InView(pos.X(), pos.Y(), pos.Z(), 200.0)) continue;
+				if (!InView(pos.X(), pos.Y(), pos.Z(), 50.0)) continue;
 
 				gp_Trsf trsf;
 				trsf.SetValues(
@@ -1551,7 +1730,8 @@ namespace Snake3DViewer
 
 				if (i < _weaponShells->size() && !(*_weaponShells)[i].IsNull())
 					(*_weaponShells)[i]->SetLocalTransformation(trsf);
-			}
+				_dbgTrsfOther++; _frameDirty;
+			}			
 		}
 
 		void UpdateSpin(double dt)
@@ -1599,6 +1779,7 @@ namespace Snake3DViewer
 
 			// Standard_False: спавн заменяет сразу три кристалла,
 			// перерисовку делает общий Redraw() игрового кадра
+			_frameDirty++;
 			_aisContext()->Display(aisShape, Standard_False);
 
 			// Оболочка: полупрозрачная сфера + «клетка» из трёх больших кругов.
@@ -1638,7 +1819,7 @@ namespace Snake3DViewer
 			sphereShape->SetLocalTransformation(init);
 
 			_superSpheres->push_back(sphereShape);
-
+			_frameDirty++;
 			_aisContext()->Display(sphereShape, Standard_False);
 		}
 
@@ -1657,6 +1838,7 @@ namespace Snake3DViewer
 				_superSpheres->erase(_superSpheres->begin() + index);
 			if (index < (int)_superBase->size())
 				_superBase->erase(_superBase->begin() + index);
+			_frameDirty++;
 		}
 
 		void ClearSuperCrystals()
@@ -1670,6 +1852,7 @@ namespace Snake3DViewer
 			_superCrystals->clear();
 			_superSpheres->clear();
 			_superBase->clear();
+			_frameDirty++;
 		}
 
 		// ═══════════════════════════════════════════════════════════════
@@ -1741,7 +1924,8 @@ namespace Snake3DViewer
 			shellShape->SetLocalTransformation(init);
 			_aisContext()->Display(shellShape, Standard_False);
 			_shieldShells->push_back(shellShape);
-			_aisContext()->Display(aisShape, Standard_True);
+			_aisContext()->Display(aisShape, Standard_False);
+			_frameDirty++;
 		}
 
 		// Ореол защиты вокруг корабля: кокон — полупрозрачная сфера и клетка
@@ -1757,7 +1941,7 @@ namespace Snake3DViewer
 				_aisContext()->Erase(_shipShield(), Standard_False);
 			_shipShield() = nullptr;
 
-			if (!on) return;
+			if (!on) { _frameDirty++; return; };
 
 			const double s45 = 0.7;
 			static const double axes[3][3] = {
@@ -1786,6 +1970,7 @@ namespace Snake3DViewer
 			s->SetTransparency(0.75);   // было бы 0.85 — еле видно; 0.55 = «кокон»
 			_shipShield() = s;
 			_aisContext()->Display(s, Standard_False);
+			_frameDirty++;
 		}
 
 		// Щит снят с арены: пропало время или подобран игроком
@@ -1801,6 +1986,7 @@ namespace Snake3DViewer
 			_shields->clear();
 			_shieldBase->clear();
 			_shieldShells->clear();
+			_frameDirty++;
 		}
 
 		// ═══════════════════════════════════════════════════════════════
@@ -1870,7 +2056,8 @@ namespace Snake3DViewer
 			_boostShells->push_back(shellShape);
 
 			_aisContext()->Display(shellShape, Standard_False);
-			_aisContext()->Display(aisShape, Standard_True);
+			_aisContext()->Display(aisShape, Standard_False);
+			_frameDirty++;
 		}
 
 		void SetShipBoost(bool on, double radius)
@@ -1882,7 +2069,7 @@ namespace Snake3DViewer
 				_aisContext()->Erase(_shipBoost(), Standard_False);
 			_shipBoost() = nullptr;
 
-			if (!on) return;
+			if (!on) { _frameDirty++; return; }
 
 			const double s45 = 0.7;
 			static const double axes[3][3] = {
@@ -1908,6 +2095,7 @@ namespace Snake3DViewer
 			s->SetTransparency(0.75);
 			_shipBoost() = s;
 			_aisContext()->Display(s, Standard_False);
+			_frameDirty++;
 		}
 
 		void RemoveBoost()
@@ -1922,6 +2110,7 @@ namespace Snake3DViewer
 			_boosts->clear();
 			_boostBase->clear();
 			_boostShells->clear();
+			_frameDirty++;
 		}
 
 		// ═══════════════════════════════════════════════════════════════
@@ -1991,7 +2180,8 @@ namespace Snake3DViewer
 
 			// Стандартный_False: пикап один, но общая перерисовка кадра дешевле
 			_aisContext()->Display(shellShape, Standard_False);
-			_aisContext()->Display(aisShape, Standard_True);
+			_aisContext()->Display(aisShape, Standard_False);
+			_frameDirty++;
 		}
 
 		// Пикап подобран или пропало время: убираем целиком
@@ -2007,6 +2197,7 @@ namespace Snake3DViewer
 			_weapons->clear();
 			_weaponBase->clear();
 			_weaponShells->clear();
+			_frameDirty++;
 		}
 
 		// ═══════════════════════════════════════════════════════════════
@@ -2016,10 +2207,14 @@ namespace Snake3DViewer
 		{
 			if (index < 0 || index >= static_cast<int>(_mines->size())) return;
 			if (!(*_mines)[index].IsNull() && !_aisContext().IsNull())
+			{
 				_aisContext()->Erase((*_mines)[index], Standard_False);
+				_mineFree->push_back((*_mines)[index]);   // шейп жив — в пул
+			}
 			_mines->erase(_mines->begin() + index);
 			if (index < (int)_mineBase->size())
 				_mineBase->erase(_mineBase->begin() + index);
+			_frameDirty++;
 		}
 
 		//Мины
@@ -2027,43 +2222,61 @@ namespace Snake3DViewer
 		{
 			for (auto& m : *_mines)
 				if (!m.IsNull() && !_aisContext().IsNull())
+				{
 					_aisContext()->Erase(m, Standard_False);
+					_mineFree->push_back(m);   // тоже в пул
+				}
 			_mines->clear();
 			_mineBase->clear();
+			_frameDirty++;
 		}
 
 		void AddMineAt(int index, double x, double y, double z, double radius)
 		{
+			static const Quantity_Color mineColor(Quantity_NOC_ORANGE);
+			static const Quantity_Color fallbackColor(Quantity_NOC_RED);
+
 			gp_Pnt center(x, y, z);
 			Handle(AIS_Shape) aisShape;
-			TopoDS_Shape* model = GetModel(4);
+			
+			if (!_mineFree->empty())
+			{
+				// Переиспользование: геометрия и презентация уже построены,
+				// нужна только новая позиция и Display
+				aisShape = _mineFree->back();
+				_mineFree->pop_back();
+			}
 
-			if (model != nullptr)
+			if (aisShape.IsNull())
 			{
-				aisShape = new AIS_Shape(*model);
-				aisShape->SetColor(Quantity_Color(Quantity_NOC_ORANGE));
+				// Пул пуст — строим с нуля, как раньше
+				TopoDS_Shape* model = GetModel(4);
+				if (model != nullptr)
+				{
+					aisShape = new AIS_Shape(*model);
+					aisShape->SetColor(mineColor);
+					aisShape->SetDisplayMode(1);
+				}
+				else
+				{
+					BRepPrimAPI_MakeSphere sphere(center, radius);
+					aisShape = new AIS_Shape(sphere.Shape());
+					aisShape->SetColor(fallbackColor);
+					aisShape->SetDisplayMode(1);
+				}
 			}
-			else
-			{
-				BRepPrimAPI_MakeSphere sphere(center, radius);
-				aisShape = new AIS_Shape(sphere.Shape());
-				aisShape->SetColor(Quantity_Color(Quantity_NOC_RED));
-			}
-			aisShape->SetDisplayMode(1);
 
 			if (index >= (int)_mines->size())    _mines->resize(index + 1);
 			if (index >= (int)_mineBase->size()) _mineBase->resize(index + 1, gp_Pnt(0, 0, 0));
 			(*_mines)[index] = aisShape;
 			(*_mineBase)[index] = center;
 
-			if (model != nullptr)
-			{
-				gp_Trsf trans;
-				trans.SetTranslation(gp_Vec(gp_Pnt(0, 0, 0), center));
-				aisShape->SetLocalTransformation(trans);
-			}
+			gp_Trsf trans;
+			trans.SetTranslation(gp_Vec(gp_Pnt(0, 0, 0), center));
+			aisShape->SetLocalTransformation(trans);
 
-			_aisContext()->Display(aisShape, Standard_True);
+			_aisContext()->Display(aisShape, Standard_False);
+			_frameDirty++;
 		}
 
 		// ═══════════════════════════════════════════════════════════════
@@ -2153,6 +2366,7 @@ namespace Snake3DViewer
 			// Выстрелов за кадр может быть несколько — перерисовка общая,
 			// её делает Redraw() игрового кадра
 			_aisContext()->Display(aisShape, Standard_False);
+			_frameDirty++;
 		}
 
 		// Ориентация: нос снаряда вдоль вектора полёта. Тот же базис
@@ -2171,7 +2385,7 @@ namespace Snake3DViewer
 			double len = dir.Magnitude();
 			gp_Trsf trsf;
 
-			if (len > 1e-6 && GetModel(ModelProjectile))
+			if (len > 1e-6)
 			{
 				gp_Dir fwd(dir);
 				gp_Dir upRef(0, 0, 1);
@@ -2186,11 +2400,10 @@ namespace Snake3DViewer
 					right.Z(), fwd.Z(), up.Z(), newPos.Z());
 			}
 			else
-			{
 				trsf.SetTranslation(gp_Vec(gp_Pnt(0, 0, 0), newPos));
-			}
 
 			(*_projectiles)[index]->SetLocalTransformation(trsf);
+			_frameDirty++;
 		}
 
 		void RemoveProjectileAt(int index)
@@ -2203,6 +2416,7 @@ namespace Snake3DViewer
 				_projectilePos->erase(_projectilePos->begin() + index);
 			if (index < (int)_projectileDirs->size())
 				_projectileDirs->erase(_projectileDirs->begin() + index);
+			_frameDirty++;
 		}
 
 		void ClearProjectiles()
@@ -2213,6 +2427,7 @@ namespace Snake3DViewer
 			_projectiles->clear();
 			_projectilePos->clear();
 			_projectileDirs->clear();
+			_frameDirty++;
 		}
 
 		// ═══════════════════════════════════════════════════════════════
@@ -2237,17 +2452,20 @@ namespace Snake3DViewer
 			if (newScale > maxScale) newScale = maxScale;
 
 			cam->SetScale(newScale);
+			_frameDirty++;
 			_view()->Redraw();
 		}
 
 		void Pan(int x, int y)
 		{
 			if (!_view().IsNull()) _view()->Pan(x, y);
+			_frameDirty++;
 		}
 
 		void Rotate(int x, int y)
 		{
 			if (!_view().IsNull()) _view()->Rotation(x, y);
+			_frameDirty++;
 		}
 
 		void StartHeadOrbit(int x, int y)
@@ -2257,6 +2475,7 @@ namespace Snake3DViewer
 
 			Handle(Graphic3d_Camera) cam = _view()->Camera();
 			cam->SetCenter((*_positions)[0]);   // ось вращения — голова змейки
+			_frameDirty++;
 
 			_view()->StartRotation(x, y);
 		}
@@ -2266,10 +2485,45 @@ namespace Snake3DViewer
 			if (!_view().IsNull()) _view()->StartRotation(x, y);
 		}
 
-		void Redraw()
+
+		///// !!!!!!!!!!!!!!!!!!!!!!!!!!!!Важно _view()->RedrawImmediate(); НЕ _view()->Redraw();
+		void RedrawImmediate()
 		{
-			if (!_view().IsNull()) _view()->Redraw();
+			if (!_view().IsNull()) _view()->RedrawImmediate(); 
 		}
+
+		void Redraw()
+		{			
+			static int dbgRedraw = 0;      // кадров с реальной перерисовкой
+			static int dbgSkipped = 0;     // кадров-пропусков (грязи не было)
+
+			if (_frameDirty == 0)
+			{
+				++dbgSkipped;
+			}
+			else
+			{
+				++dbgRedraw;
+				if (!_aisContext().IsNull())
+					_aisContext()->UpdateCurrentViewer();
+			}
+			_frameDirty = 0;   // сброс в любом случае: грязь копится заново каждый кадр
+
+			double dbgSpan = (System::DateTime::UtcNow - _dbgTrsfLast).TotalSeconds;
+			if (dbgSpan >= 1.0)
+			{
+				System::Diagnostics::Trace::WriteLine(
+					System::String::Format(
+						"[Trsf] кристаллы: {0} | мины: {1} | сегменты: {2} | прочие: {3} | redraw: {4} | скип: {5}",
+						_dbgTrsfCrystal, _dbgTrsfMine, _dbgTrsfSeg, _dbgTrsfOther,
+						dbgRedraw, dbgSkipped));
+				AuditScene();
+				_dbgTrsfCrystal = _dbgTrsfMine = _dbgTrsfSeg = _dbgTrsfOther = 0;
+				dbgRedraw = dbgSkipped = 0;
+				_dbgTrsfLast = System::DateTime::UtcNow;
+			}
+		}
+		
 
 		void FitScene()
 		{
@@ -2338,9 +2592,6 @@ namespace Snake3DViewer
 			if ((size_t)headIndex >= _snakeSegments->size()) return;
 			if (_view().IsNull()) return;
 
-			/*Handle(AIS_Shape) headShape = (*_snakeSegments)[headIndex];
-			if (headShape.IsNull()) return;*/
-
 			double cx = (*_positions)[headIndex].X();
 			double cy = (*_positions)[headIndex].Y();
 			double cz = (*_positions)[headIndex].Z();
@@ -2366,11 +2617,19 @@ namespace Snake3DViewer
 				lerpSpeed = 0.05;
 			}
 			if (snap) lerpSpeed = 1.0;
+
 			// Геометрия камеры жёсткая: глаз на фиксированном отлёте и высоте,
 			// взгляд строго по курсу. Никакого лерпа — плавность даёт
 			// интерполяция позиций змейки на стороне C#.
 			Handle(Graphic3d_Camera) cam = _view()->Camera();
-			cam->SetFOVy(fov);
+
+			// FOV меняется только со сменой режима — не ставим его каждый кадр
+			static double s_lastFov = -1.0;
+			if (std::abs(fov - s_lastFov) > 1e-9)
+			{
+				cam->SetFOVy(fov);
+				s_lastFov = fov;
+			}
 
 			// Eye = голова - forward*camBack + up*camUp
 			double desiredEyeX = cx - _dirX * camBack + _upX * camUp;
@@ -2398,11 +2657,27 @@ namespace Snake3DViewer
 			double newAtY = currentAt.Y() + (desiredAtY - currentAt.Y()) * lerpSpeed;
 			double newAtZ = currentAt.Z() + (desiredAtZ - currentAt.Z()) * lerpSpeed;
 
+			// Guard: камера не сдвинулась и up не изменился — не трогаем вью,
+			// Redraw этого кадра останется «чистым».
+			static double s_lastUpX = 1e9, s_lastUpY = 1e9, s_lastUpZ = 1e9;
+			const double eps = 1e-6;
+			if (std::abs(newEyeX - currentEye.X()) < eps &&
+				std::abs(newEyeY - currentEye.Y()) < eps &&
+				std::abs(newEyeZ - currentEye.Z()) < eps &&
+				std::abs(newAtX - currentAt.X()) < eps &&
+				std::abs(newAtY - currentAt.Y()) < eps &&
+				std::abs(newAtZ - currentAt.Z()) < eps &&
+				std::abs(_upX - s_lastUpX) < eps &&
+				std::abs(_upY - s_lastUpY) < eps &&
+				std::abs(_upZ - s_lastUpZ) < eps)
+				return;
+			s_lastUpX = _upX; s_lastUpY = _upY; s_lastUpZ = _upZ;
+
 			// 5. Применение: позиция + вектор up (камера вращается с кораблём)
 			cam->SetEye(gp_Pnt(newEyeX, newEyeY, newEyeZ));
 			cam->SetCenter(gp_Pnt(desiredAtX, desiredAtY, desiredAtZ));
 			cam->SetUp(gp_Dir(_upX, _upY, _upZ));
-
+			_frameDirty++;
 
 			_camEyeX = newEyeX; _camEyeY = newEyeY; _camEyeZ = newEyeZ;
 			_camDirX = _dirX;   _camDirY = _dirY;   _camDirZ = _dirZ;			
@@ -2444,16 +2719,23 @@ namespace Snake3DViewer
 
 		bool InView(double px, double py, double pz, double maxDist)
 		{
-			double dx = px - _camEyeX;
-			double dy = py - _camEyeY;;
-			double dz = pz - _camEyeZ;
+			if (_view().IsNull()) return true;   // камеры нет — не отсекаем
+
+			Handle(Graphic3d_Camera) cam = _view()->Camera();
+			gp_Pnt eye = cam->Eye();
+			gp_Vec fwd(cam->Eye(), cam->Center());   // вектор от центра к глазу
+			fwd.Normalize();
+
+			double dx = px - eye.X();
+			double dy = py - eye.Y();
+			double dz = pz - eye.Z();
 			double dist = sqrt(dx * dx + dy * dy + dz * dz);
 
 			if (dist > maxDist) return false;
 			if (dist < 1e-9) return true;
 
 			// cos(70°) ≈ 0.342 — конус с запасом вокруг реального FOV ~60°
-			return (dx * _camDirX + dy * _camDirY + dz * _camDirZ) / dist > 0.342;
+			return (dx * fwd.X() + dy * fwd.Y() + dz * fwd.Z()) / dist > 0.342;
 		}
 		
 		// ═══════════════════════════════════════════════════════════════
@@ -2487,14 +2769,39 @@ namespace Snake3DViewer
 					   double ux, double uy, double uz,
 					   double timeSec)
 		{
+			// Корабль стоит на месте и курс не меняется — вся его геометрия
+			// уже в актуальном состоянии, повторная установка только пачкает.
+			static double s_lx = 1e9, s_ly = 1e9, s_lz = 1e9;
+			static double s_lfx = 1e9, s_lfy = 1e9, s_lfz = 1e9;
+			static double s_lux = 1e9, s_luy = 1e9, s_luz = 1e9;
+			static double s_ltime = -1e9;
+
+			if (std::abs(x - s_lx) < 1e-9 && std::abs(y - s_ly) < 1e-9 &&
+				std::abs(z - s_lz) < 1e-9 &&
+				std::abs(fx - s_lfx) < 1e-9 && std::abs(fy - s_lfy) < 1e-9 &&
+				std::abs(fz - s_lfz) < 1e-9 &&
+				std::abs(ux - s_lux) < 1e-9 && std::abs(uy - s_luy) < 1e-9 &&
+				std::abs(uz - s_luz) < 1e-9 &&
+				std::abs(timeSec - s_ltime) < 1e-9)
+				return;
+
+			s_lx = x; s_ly = y; s_lz = z;
+			s_lfx = fx; s_lfy = fy; s_lfz = fz;
+			s_lux = ux; s_luy = uy; s_luz = uz;
+			s_ltime = timeSec;
+
 			gp_Trsf head = TrsfFromFrame(x, y, z, fx, fy, fz, ux, uy, uz);
+
+			const int botShipIdBase = 60;   // боты держат свои части сами (PlaceBotShip)
 
 			for (NCollection_DataMap<int, Handle(AIS_Shape)>::Iterator it(*_shipParts);
 				it.More(); it.Next())
 			{
+				if (it.Key() >= botShipIdBase) continue;   // части ботов — вне кадра игрока
 				if (!_fitTrsf->IsBound(it.Key())) continue;
 
-				it.Value()->SetLocalTransformation(head.Multiplied((*_fitTrsf)(it.Key())));				
+				it.Value()->SetLocalTransformation(head.Multiplied((*_fitTrsf)(it.Key())));
+				_dbgTrsfOther++; _frameDirty++;
 			}
 
 			// Корабль = голова: держим слот 0 в курсе для камеры (FollowHead)
@@ -2515,6 +2822,7 @@ namespace Snake3DViewer
 					_engineGlowB,
 					Quantity_TOC_RGB));
 				_enginePart()->SetTransparency(0.2 + 0.3 * k);
+				_dbgTrsfOther++; _frameDirty++;
 			}
 
 			//ореол садится на общий кадр корабля
@@ -2526,6 +2834,7 @@ namespace Snake3DViewer
 				gp_Trsf spin;
 				spin.SetRotation(gp_Ax1(gp_Pnt(0, 0, 0), gp_Dir(0, 0, 1)), _spinAngle);
 				_shipShield()->SetLocalTransformation(head.Multiplied(spin));
+				_dbgTrsfOther++; _frameDirty++;
 			}
 
 			if (_shipBoostOn && !_shipBoost().IsNull())
@@ -2533,10 +2842,48 @@ namespace Snake3DViewer
 				gp_Trsf spin;
 				spin.SetRotation(gp_Ax1(gp_Pnt(0, 0, 0), gp_Dir(0, 0, 1)), _spinAngle);
 				_shipBoost()->SetLocalTransformation(head.Multiplied(spin));
+				_dbgTrsfOther++; _frameDirty++;
 			}
 		}
 
+		// Корабль бота: тот же кадр головы × подгонка части, но только СВОИ id
+		// (блок 60 + botId*10 .. +9). Без мерцания двигателя и щита — это
+		// эффекты игрока. Камера FollowHead ботов не видит: она читает slot 0,
+		// а ботовские сегменты живут на индексах 10000+.
+		void PlaceBotShip(int botId, double x, double y, double z,
+			double fx, double fy, double fz,
+			double ux, double uy, double uz)
+		{
+			const int base = 60 + botId * 10;
+			const int stride = 10;
 
+			// Слот головы бота — как у игрока: позицию и направление держим
+			// свежими, от них первый видимый сегмент (слот +2) строит ориентацию.
+			// Блоки ботов: 10000 + botId*512 (BotSnake.GlobalId).
+			const int kBotBase = 10000;   // GameConfig.Bot.SegmentIdBase
+			const int kBotStride = 512;   // GameConfig.Bot.IdStride
+			int headSlot = kBotBase + botId * kBotStride;
+
+			if (headSlot < static_cast<int>(_snakeSegments->size()) &&
+				(*_snakeSegments)[headSlot].IsNull())
+			{
+				(*_positions)[headSlot] = gp_Pnt(x, y, z);
+				(*_segmentDirs)[headSlot] = gp_Vec(fx, fy, fz);
+			}
+
+			gp_Trsf head = TrsfFromFrame(x, y, z, fx, fy, fz, ux, uy, uz);
+
+			for (NCollection_DataMap<int, Handle(AIS_Shape)>::Iterator it(*_shipParts);
+				it.More(); it.Next())
+			{
+				int id = it.Key();
+				if (id < base || id >= base + stride) continue;
+				if (!_fitTrsf->IsBound(id)) continue;
+
+				it.Value()->SetLocalTransformation(head.Multiplied((*_fitTrsf)(id)));
+				_dbgTrsfOther++; _frameDirty++;
+			}
+		}
 
 		// Создать часть корабля из уже загруженной модели и поставить на сцену.
 		// Трансформацию применит PlaceShip (общий кадр × _fitTrsf) в первом же кадре.
@@ -2551,6 +2898,7 @@ namespace Snake3DViewer
 			if (id == 7) _enginePart() = ais;
 
 			_aisContext()->Display(ais, Standard_False);
+			_frameDirty++;
 			return true;
 		}
 
@@ -2618,6 +2966,9 @@ namespace Snake3DViewer
 		void SetMuzzleOffset(int gunId, double dx, double dy, double dz)
 		{
 			(*_muzzleLocal)[gunId] = gp_XYZ(dx, dy, dz);
+
+			System::Diagnostics::Debug::WriteLine(
+				String::Format("[Muzzle] Set id={0} off=({1:F2},{2:F2},{3:F2})", gunId, dx, dy, dz));
 		}
 
 		// Мировая точка вылета: кадр корабля × подгоночная трансформация × офсет.
@@ -2635,10 +2986,37 @@ namespace Snake3DViewer
 			gp_Trsf head = TrsfFromFrame(headX, headY, headZ, fx, fy, fz, ux, uy, uz);
 			gp_Trsf full = head.Multiplied((*_fitTrsf)(gunId));
 
-			gp_Pnt p(it->second.X(), it->second.Y(), it->second.Z());
+			double s = 1.0;
+			auto gs = _gunScale->find(gunId);
+			if (gs != _gunScale->end()) s = gs->second;
+			
+			gp_XYZ off = it->second * s;
+			gp_Pnt p(off.X(), off.Y(), off.Z());
 			p.Transform(full);
 
 			wx = p.X(); wy = p.Y(); wz = p.Z();
+			System::Diagnostics::Debug::WriteLine(
+				String::Format("[Muzzle] Get id={0} world=({1:F2},{2:F2},{3:F2})", gunId, p.X(), p.Y(), p.Z()));
+			return true;
+		}
+
+		// Направление ствола в мире: та же цепочка head × fit,
+		// но применённая к локальной «вперёд» пушки (gp_Dir игнорирует перенос).
+		bool GetMuzzleDir(int gunId,
+			double headX, double headY, double headZ,
+			double fx, double fy, double fz,
+			double ux, double uy, double uz,
+			double% dx, double% dy, double% dz)
+		{
+			if (!_fitTrsf->IsBound(gunId)) return false;
+
+			gp_Trsf head = TrsfFromFrame(headX, headY, headZ, fx, fy, fz, ux, uy, uz);
+			gp_Trsf full = head.Multiplied((*_fitTrsf)(gunId));
+
+			gp_Dir d(0, 1, 0);        // локальная «вперёд» пушки
+			d.Transform(full);
+
+			dx = d.X(); dy = d.Y(); dz = d.Z();
 			return true;
 		}
 
@@ -2684,9 +3062,11 @@ namespace Snake3DViewer
 				trans.SetTranslation(gp_Vec(gp_Pnt(0, 0, 0), gp_Pnt(x, y, z)));
 				_crosshair()->SetLocalTransformation(trans);
 				_aisContext()->Display(_crosshair(), Standard_False);
+				_frameDirty++;
 			}
 			else
 				_aisContext()->Erase(_crosshair(), Standard_False);
+			_frameDirty++;
 
 			_aisContext()->UpdateCurrentViewer();
 		}
@@ -2700,6 +3080,7 @@ namespace Snake3DViewer
 			gp_Trsf trans;
 			trans.SetTranslation(gp_Vec(gp_Pnt(0, 0, 0), gp_Pnt(x, y, z)));
 			_crosshair()->SetLocalTransformation(trans);
+			_frameDirty++;
 		}
 
 
@@ -2810,5 +3191,58 @@ namespace Snake3DViewer
 				return (int)lst.Size();
 			}
 		}
+
+		// Ревизия сцены: по каждому хранилищу считаем живые шейпы.
+		// Сумма должна совпадать с реальным числом отображённых объектов;
+		// расхождение — фантомы, и сразу видно, из какого блока они.
+		void AuditScene()
+		{
+			if (_aisContext().IsNull()) return;
+			AIS_ListOfInteractive objs;
+			_aisContext()->DisplayedObjects(objs);
+			int scene = objs.Size();
+
+			int segPlayer = 0, segBots = 0;
+			const int kBotBase = 10000;
+			for (size_t i = 0; i < _snakeSegments->size(); ++i)
+			{
+				if ((*_snakeSegments)[i].IsNull()) continue;
+				if (i < (size_t)kBotBase) ++segPlayer; else ++segBots;
+			}
+
+			int shipParts = 0;
+			for (NCollection_DataMap<int, Handle(AIS_Shape)>::Iterator it(*_shipParts);
+				it.More(); it.Next()) ++shipParts;
+
+			int highlights = 0;
+			for (auto& kv : *_highlights) if (!kv.second.IsNull()) ++highlights;
+
+			System::Diagnostics::Trace::WriteLine(System::String::Format(
+				"[Аудит] сцена:   {0}  | игрок:    {1} | боты:    {2} | части:       {3} |"
+					+ "| крист:   {4}  | ореолы :  {5} | супер :  {6} | обол :       {7} |"
+					+ "| мины :   {8}  | снаряды : {9} | щиты :  {10} | бусты :     {11} |"
+					+ "| пикапы : {12} | стены :  {13} | сетка : {14} | подсветка : {15}",
+				scene, segPlayer, segBots, shipParts,
+				CountAlive(_crystals),		CountAlive(_crystalHalos),
+				CountAlive(_superCrystals), CountAlive(_superSpheres),
+				CountAlive(_mines),			CountAlive(_projectiles),
+				CountAlive(_shields) +		CountAlive(_shieldShells),
+				CountAlive(_boosts) +		CountAlive(_boostShells),
+				CountAlive(_weapons) +		CountAlive(_weaponShells),
+				CountAlive(_walls),			CountAlive(_grid), highlights));
+		}
 	};
+}
+
+namespace
+{
+	// Подсчёт живых (не null) шейпов в векторе. Свободная функция вне
+	// managed-класса: локальные типы и лямбды внутри managed-методов
+	// запрещены в C++/CLI.
+	int CountAlive(const std::vector<Handle(AIS_Shape)>* v)
+	{
+		int n = 0;
+		for (auto& h : *v) if (!h.IsNull()) ++n;
+		return n;
+	}
 }

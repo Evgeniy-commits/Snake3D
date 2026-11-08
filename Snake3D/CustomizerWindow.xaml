@@ -278,6 +278,31 @@
 					</StackPanel>
 				</Grid>
 
+				<TextBlock Text="Положение дула" Style="{StaticResource Label}"
+							x:Name="MuzzleHeader" Margin="0,18,0,6" Visibility="Collapsed"/>
+				<StackPanel x:Name="MuzzlePanel" Visibility="Collapsed">
+					<ComboBox x:Name="GunPick" Style="{StaticResource DarkCombo}"
+							SelectionChanged="GunPick_SelectionChanged"/>
+					<Grid Margin="0,0,0,3">
+						<TextBlock Text="X" Foreground="{StaticResource TextHint}" VerticalAlignment="Center"/>
+						<TextBox x:Name="MuzX" Width="64" HorizontalAlignment="Right"
+							Style="{StaticResource DarkBox}" TextChanged="MuzBox_TextChanged"/>
+					</Grid>
+					<Grid Margin="0,0,0,3">
+						<TextBlock Text="Y" Foreground="{StaticResource TextHint}" VerticalAlignment="Center"/>
+						<TextBox x:Name="MuzY" Width="64" HorizontalAlignment="Right"
+							Style="{StaticResource DarkBox}" TextChanged="MuzBox_TextChanged"/>
+					</Grid>
+					<Grid>
+						<TextBlock Text="Z" Foreground="{StaticResource TextHint}" VerticalAlignment="Center"/>
+						<TextBox x:Name="MuzZ" Width="64" HorizontalAlignment="Right"
+							Style="{StaticResource DarkBox}" TextChanged="MuzBox_TextChanged"/>
+					</Grid>
+					<TextBlock Text="в системе корабля: X — борт, Y — вперёд, Z — вверх"
+							Foreground="{StaticResource TextMuted}" FontSize="11" Margin="0,4,0,0"/>
+				</StackPanel>
+				<Button x:Name="BtnRebuild" Content="Собрать"
+						Style="{StaticResource DarkButton}" Click="BtnRebuild_Click"/>
 				<Button Content="Закрыть  (Esc)"
                         Style="{StaticResource DarkButton}" Click="BtnClose_Click"/>
 			</StackPanel>

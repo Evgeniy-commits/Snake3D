@@ -23,6 +23,11 @@ namespace Snake3D
         private readonly Ellipse? _crystalDot;
         private readonly List<Ellipse> _crystalDots = new();
 
+        private readonly StackPanel _healthBar = new();
+        private readonly List<System.Windows.Shapes.Rectangle> _healthCells = new();
+        private readonly System.Windows.Shapes.Rectangle _hitFlash;
+        private readonly System.Windows.Shapes.Rectangle _shieldFlash;
+
         public HudOverlay()
         {
             WindowStyle = WindowStyle.None;
@@ -58,16 +63,30 @@ namespace Snake3D
             _crosshair.RenderTransform = new TranslateTransform(0, 0);
             _canvas.Children.Add(_crosshair);
 
-            // Маркер кристалла
-            //_crystalDot = new Ellipse
-            //{
-            //    Width = 16,
-            //    Height = 16,
-            //    Stroke = System.Windows.Media.Brushes.Orange,
-            //    StrokeThickness = 2,
-            //    Visibility = Visibility.Collapsed
-            //};
-            //_canvas.Children.Add(_crystalDot);
+            _hitFlash = new System.Windows.Shapes.Rectangle
+            {
+                Fill = new SolidColorBrush(System.Windows.Media.Color.FromRgb(0xFF, 0x30, 0x30)),
+                Opacity = 0,
+                IsHitTestVisible = false,
+                HorizontalAlignment = System.Windows.HorizontalAlignment.Stretch,
+                VerticalAlignment = System.Windows.VerticalAlignment.Stretch
+            };
+            _shieldFlash = new System.Windows.Shapes.Rectangle
+            {
+                Fill = new SolidColorBrush(System.Windows.Media.Color.FromRgb(0x40, 0xA0, 0xFF)),
+                Opacity = 0,
+                IsHitTestVisible = false,
+                HorizontalAlignment = System.Windows.HorizontalAlignment.Stretch,
+                VerticalAlignment = System.Windows.VerticalAlignment.Stretch
+            };
+            _canvas.Children.Add(_hitFlash);
+            _canvas.Children.Add(_shieldFlash);
+
+            // Полоска здоровья: 5 делений, левый верхний угол с отступом.
+            // Прозрачный фон панели — оверлей целиком прозрачный.
+            _healthBar.Margin = new Thickness(24, 24, 0, 0);
+            _healthBar.Orientation = System.Windows.Controls.Orientation.Horizontal;
+            _canvas.Children.Add(_healthBar);
         }
 
         public void ShowCrosshair(bool show)
@@ -81,20 +100,7 @@ namespace Snake3D
             t.X = cx;
             t.Y = cy;
         }
-
-        // x == null — маркер скрыт (кристалл вне экрана/сзади)
-        //public void PlaceCrystal(double? x, double y)
-        //{
-        //    if (x == null)
-        //    {
-        //        _crystalDot!.Visibility = Visibility.Collapsed;
-        //        return;
-        //    }
-        //    _crystalDot!.Visibility = Visibility.Visible;
-        //    Canvas.SetLeft(_crystalDot, x.Value - _crystalDot.Width / 2);
-        //    Canvas.SetTop(_crystalDot, y - _crystalDot.Height / 2);
-        //}
-
+        
         //UpdateCrystalMarkers(xs, ys) — синхронизирует пул точек со списком
         //проекций: недостающие создаёт, лишние убирает, xs[i] == null —
         //кристалл вне экрана или за камерой, маркер скрыт.Позиция через
@@ -134,5 +140,53 @@ namespace Snake3D
                 Canvas.SetTop(_crystalDots[i], ys[i] - _crystalDots[i].Height / 2);
             }
         }
+
+        // Обновить полоску здоровья: count живых делений из max.
+        // Пул делений синхронизируется с max — как маркеры кристаллов.
+        public void UpdateHealth(int count, int max)
+        {
+            while (_healthCells.Count < max)
+            {
+                var cell = new System.Windows.Shapes.Rectangle
+                {
+                    Width = 26,
+                    Height = 8,
+                    Margin = new Thickness(0, 0, 4, 0),
+                    RadiusX = 2,
+                    RadiusY = 2,
+                    StrokeThickness = 1
+                };
+                _healthBar.Children.Add(cell);
+                _healthCells.Add(cell);
+            }
+            while (_healthCells.Count > max)
+            {
+                _healthBar.Children.RemoveAt(_healthBar.Children.Count - 1);
+                _healthCells.RemoveAt(_healthCells.Count - 1);
+            }
+
+            for (int i = 0; i < _healthCells.Count; i++)
+            {
+                bool alive = i < count;
+                _healthCells[i].Fill = alive
+                    ? new SolidColorBrush(System.Windows.Media.Color.FromRgb(0x30, 0xE0, 0x50))
+                    : new SolidColorBrush(System.Windows.Media.Color.FromArgb(90, 0x60, 0x60, 0x60));
+                _healthCells[i].Stroke = new SolidColorBrush(System.Windows.Media.Color.FromArgb(
+                    alive ? (byte)0xC0 : (byte)0x40, 0xFF, 0xFF, 0xFF));
+            }
+        }
+
+        // Вспышка: цвет заливки + анимация прозрачности от 0.55 до 0 за 350 мс
+        private void Flash(System.Windows.Shapes.Rectangle rect, System.Windows.Media.Color color)
+        {
+            rect.Fill = new SolidColorBrush(color);
+            var anim = new System.Windows.Media.Animation.DoubleAnimation(
+                0.55, 0.0, TimeSpan.FromMilliseconds(350));
+            rect.Opacity = 0.55;
+            rect.BeginAnimation(OpacityProperty, anim);
+        }
+
+        public void ShowRedFlash() => Flash(_hitFlash, System.Windows.Media.Color.FromRgb(0xFF, 0x30, 0x30));
+        public void ShowBlueFlash() => Flash(_shieldFlash, System.Windows.Media.Color.FromRgb(0x40, 0xA0, 0xFF));
     }
 }

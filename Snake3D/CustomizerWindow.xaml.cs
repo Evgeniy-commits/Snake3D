@@ -25,6 +25,9 @@ namespace Snake3D
         private bool _syncingColor;       // защита от петли: код → поля → TextChanged
         private Ellipse? _specMarker;
 
+        private int _muzzleGun;            // какой ствол редактируем
+        private bool _syncingMuzzle;       // защита от петли код → поля
+
         public CustomizerWindow()
         {
             DarkTitle.Apply(this);
@@ -130,7 +133,103 @@ namespace Snake3D
                 p.AddShipPart(id);
                 var c = ship.GunColor[i];
                 p.SetPartColor(id, c[0], c[1], c[2], ship.GunMaterial[i]);
+
+                var m = ship.MuzzleOffset[i];                    
+                p.SetMuzzleOffset(id, m[0], m[1], m[2]);
             }
+            PlaceProjectiles(p);
+        }
+
+        // Снаряды в точках вылета: позиции берём у самого прокси через GetMuzzleWorld —
+        // ровно тот же расчёт, что в Fire(), поэтому превью совпадает с игрой 1:1
+        private void PlaceProjectiles(Snake3DViewer.SnakeSceneProxy p)
+        {
+            var ship = GameConfig.Ship.Cur;
+
+            var pc = GameConfig.Weapon.ProjectileColor;
+            p.SetProjectileColor(pc[0], pc[1], pc[2]);
+
+            // масштаб как в SnakeGame: ProjectileSize * 6; без файла прокси даст болт
+            p.LoadStepModel(GameConfig.Weapon.ProjectileModelPath,
+                            GameConfig.Weapon.ProjectileModelId,
+                            GameConfig.Weapon.ProjectileVisualScale);
+
+            // корабль в кастомайзере стоит в нуле, курсом по +Y, верхом по +Z —
+            // та же ориентация, что после Reset в игре
+            p.PlaceShip(0, 0, 0, 0, 1, 0, 0, 0, 1, 0);
+
+            p.ClearProjectiles();
+            for (int i = 0; i < ship.GunPaths.Length; i++)
+            {
+                int gunId = GameConfig.Weapon.GunIdBase + i;
+                double mx = 0, my = 0, mz = 0;
+                bool ok = p.GetMuzzleWorld(gunId,
+                    0, 0, 0,                      // позиция головы/корабля
+                    0, 1, 0,                      // forward
+                    0, 0, 1,                      // up
+                    ref mx, ref my, ref mz);
+
+                System.Diagnostics.Trace.WriteLine(
+                            $"[Muzzle] id={gunId} ok={ok} world=({mx:F2}, {my:F2}, {mz:F2})");
+
+                if (!ok) continue;                // ствол не загрузился или офсет не задан
+
+                double dx = 0, dy = 1, dz = 0;
+                p.GetMuzzleDir(gunId, 0, 0, 0, 0, 1, 0, 0, 0, 1, ref dx, ref dy, ref dz);
+
+                p.AddProjectileAt(i, mx, my, mz, 0, 1, 0, GameConfig.Weapon.ProjectileSize);
+                p.MoveProjectile(i, mx, my, mz);
+            }
+        }
+
+        private void RefreshMuzzlePanel()
+        {
+            bool show = _selectedPart == 4;
+            MuzzleHeader.Visibility = MuzzlePanel.Visibility =
+                show ? Visibility.Visible : Visibility.Collapsed;
+            if (!show) return;
+
+            var ship = GameConfig.Ship.Cur;
+            _syncingMuzzle = true;   // гасим и SelectionChanged, и TextChanged
+
+            GunPick.Items.Clear();
+            for (int i = 0; i < ship.GunPaths.Length; i++)
+                GunPick.Items.Add(ship.GunPaths.Length == 1 ? "Ствол" : $"Ствол {i + 1}");
+            if (_muzzleGun >= ship.GunPaths.Length) _muzzleGun = 0;
+            GunPick.SelectedIndex = _muzzleGun;
+
+            var m = ship.MuzzleOffset[_muzzleGun];
+            MuzX.Text = m[0].ToString("0.###");
+            MuzY.Text = m[1].ToString("0.###");
+            MuzZ.Text = m[2].ToString("0.###");
+            _syncingMuzzle = false;
+        }
+
+        private void GunPick_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            if (_syncingMuzzle || GunPick.SelectedIndex < 0) return;
+            _muzzleGun = GunPick.SelectedIndex;
+            RefreshMuzzlePanel();
+        }             
+
+        private void MuzBox_TextChanged(object sender, TextChangedEventArgs e)
+        {
+            if (_syncingMuzzle || _viewport?.Proxy == null) return;
+            var ship = GameConfig.Ship.Cur;
+            if (_muzzleGun >= ship.MuzzleOffset.Length) return;
+
+            var m = ship.MuzzleOffset[_muzzleGun];
+            if (double.TryParse(MuzX.Text, System.Globalization.CultureInfo.InvariantCulture, out var x)) m[0] = x;
+            if (double.TryParse(MuzY.Text, System.Globalization.CultureInfo.InvariantCulture, out var y)) m[0] = y;
+            if (double.TryParse(MuzZ.Text, System.Globalization.CultureInfo.InvariantCulture, out var z)) m[0] = z;
+            //if (double.TryParse(MuzX.Text, out var x)) m[0] = x;
+            //if (double.TryParse(MuzY.Text, out var y)) m[1] = y;
+            //if (double.TryParse(MuzZ.Text, out var z)) m[2] = z;
+
+            int id = GameConfig.Weapon.GunIdBase + _muzzleGun;
+            _viewport.Proxy.SetMuzzleOffset(id, m[0], m[1], m[2]);
+            PlaceProjectiles(_viewport.Proxy);
+            SettingsStore.Save();
         }
 
         // Постройка хвоста — отдельный метод, чтобы вызывать и при старте,
@@ -153,6 +252,8 @@ namespace Snake3D
             RebuildScene(_viewport.Proxy);
             SettingsStore.Save();
             ShowCurrentColor();   // ползунки и превью — под новый корабль
+            _muzzleGun = 0;   // при смене корабля число стволов может быть другим
+            RefreshMuzzlePanel();
         }
 
         // Полная пересборка сцены: как Reset в игре, но с фоном кастомайзера
@@ -311,6 +412,7 @@ namespace Snake3D
         {
             _selectedPart = PartsList.SelectedIndex < 0 ? 0 : PartsList.SelectedIndex;
             ShowCurrentColor();
+            RefreshMuzzlePanel();
         }
 
         private void ShowCurrentColor()
@@ -397,6 +499,14 @@ namespace Snake3D
         {
             if (!_rotating) return;
             _viewport!.Proxy!.Rotate(e.X, _viewport.Height - e.Y);
+        }
+
+        private void BtnRebuild_Click(object sender, RoutedEventArgs e)
+        {
+            if(_viewport?.Proxy == null) return;
+            RebuildScene(_viewport.Proxy);   // внутри — BuildShip с PlaceProjectiles
+            ShowCurrentColor();              // пиппер — под цвет из конфига
+            RefreshMuzzlePanel();            // поля дула — под новые значения
         }
 
         private void Viewport_MouseUp(object sender, WF.MouseEventArgs e) => _rotating = false;

@@ -197,6 +197,26 @@ namespace Snake3D
                 _game.ShotFired += () => Audio.Service.PlaySfx("shot");
                 _game.MineDestroyed += () => Audio.Service.PlaySfx("explosion");
 
+                // Здоровье: полоска в HUD + вспышки + звуки.
+                // Frame() гоняется в CompositionTarget.Rendering, то есть в UI-потоке,
+                // поэтому Dispatcher.Invoke здесь формально лишний — но стоит по образцу
+                // остальных подписок: если тик когда-нибудь уедет в фоновый поток, не сломается.
+
+                _game.HealthChanged += (hp) =>
+                    Dispatcher.Invoke(() => _hud?.UpdateHealth(hp, GameConfig.Health.MaxHits));
+                _game.PlayerHit += () =>
+                    Dispatcher.Invoke(() =>
+                    {
+                        _hud?.ShowRedFlash();
+                        Audio.Service.PlaySfx("explosion");
+                    });
+                _game.HitBlocked += () =>
+                    Dispatcher.Invoke(() =>
+                    {
+                        _hud?.ShowBlueFlash();
+                        Audio.Service.PlaySfx("shieldUp");
+                    });
+
                 // 3. События логики приходят из кадрового цикла — в UI-поток через Dispatcher
                 _game.ScoreChanged += (s, score) =>
                     Dispatcher.Invoke(() =>
@@ -235,6 +255,8 @@ namespace Snake3D
                 // Источник опций — opt из меню, отдельного _game.Options нет.
                 _game.ApplyOptions(opt);
                 _game.Reset();
+
+                _hud?.UpdateHealth(GameConfig.Health.MaxHits, GameConfig.Health.MaxHits);
 
                 // Прицел: строим геометрию заранее, чтобы первый выстрел
                 // не платил за сборку кольца. Включение — только при зарядах.
