@@ -174,7 +174,7 @@ namespace Snake3D
             public const int WeaponModelId = 14;
             public const int PickupModelId = 15;
 
-            public const int    TriggerCount = 8;             // кристаллов до появления пикапа
+            public const int    TriggerCount = 25;             // кристаллов до появления пикапа
             public const double LifeTime = 30.0;            // пикап живёт на поле, сек
             public const int    ShotsPerPickup = 10;            // снарядов за один пикап
             public const double FireCooldown = 0.25;        // пауза между выстрелами, сек
@@ -217,7 +217,7 @@ namespace Snake3D
             public const int    TriggerCount = 20;                 // съеденных кристаллов до появления щита
             public const double LifeTime = 60.0;                // сколько щит ждёт на арене, сек
             public const double ProtectionTime = 30.0;          // защита от мин после подбора, сек
-            public const double ShipHaloRadius = 2.2;           // радиус ореола вокруг корабля
+            public const double ShipHaloRadius = 2.5;           // радиус ореола вокруг корабля
         }
 
         public static class Boost
@@ -231,6 +231,19 @@ namespace Snake3D
             public const double BoostTime = 30.0;               // ускорение после подбора, сек
             public const double SpeedMultiplier = 1.5;          // множитель скорости
             public const double ShipHaloRadius = 2.5;           // радиус ореола вокруг корабля
+        }
+
+        public static class Labyrinth
+        {
+            public const bool UseLabyrinth = true;   // false → откат на сферу
+            public const int RingCount = 6;         // число колец в коридоре
+            public const double RingOuterR = 4.0;     // внешний радиус тора
+            public const double RingInnerR = 3.4;     // радиус прохода (труба тора)
+            public const double Spacing = 6.0;        // шаг между кольцами по оси
+            public const double PassCooldown = 45.0;  // сек до следующего refill
+            public const double PlayerStartHealth = 5.0;
+            public const double BotStartHealth = 3.0;
+            public const int SpawnAmmo = 20;       // как при старте игры
         }
 
         // Боты 
@@ -248,7 +261,7 @@ namespace Snake3D
             public const int KillScore = 100;
 
             // Хитбокс для снарядов: уязвимы только первые N сегментов
-            // (голова + 4). Хвост — «броня», как ты и просил. Правило
+            // (голова + 4). Хвост — «броня». Правило
             // симметричное: действует и на игрока.
             public const int VulnerableSegments = 5;
 

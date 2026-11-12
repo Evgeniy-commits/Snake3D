@@ -60,6 +60,7 @@
 #include <STEPControl_Reader.hxx>
 #include <IFSelect_ReturnStatus.hxx>
 #include <BRepBuilderAPI_Transform.hxx>
+#include <BRepPrimAPI_MakeTorus.hxx>
 
 #include <V3d_AmbientLight.hxx>
 #include <V3d_DirectionalLight.hxx>
@@ -89,7 +90,7 @@
 
 //Полигональность
 #include <TopExp_Explorer.hxx>      // TopExp_Explorer
-#include <TopoDS.hxx>               // TopoDS::Face  ← то, чего не хватило сейчас
+#include <TopoDS.hxx>               // TopoDS::Face  
 #include <TopoDS_Face.hxx>          // тип TopoDS_Face
 #include <TopAbs_ShapeEnum.hxx>     // TopAbs_FACE
 #include <BRep_Tool.hxx>            // BRep_Tool::Triangulation
@@ -117,6 +118,10 @@ using namespace System::Runtime::InteropServices;
 namespace
 {
 	int CountAlive(const std::vector<Handle(AIS_Shape)>* v);   // forward declaration
+	const int    LabRingCount = 6;
+	const double LabOuterR = 4.0;
+	const double LabSpacing = 6.0;
+	//const double LabPassCd = 0.0;   // кулдаун считает C#-сторона, здесь не нужен
 }
 
 namespace Snake3DViewer
@@ -176,6 +181,7 @@ namespace Snake3DViewer
 		std::vector<gp_Vec>* _segmentDirs;
 		std::vector<gp_Pnt>* _segApplied;      // последняя реально применённая позиция
 		double _segAppliedSpin = -1e9;
+		double _camDebt = 0.0;   // накопленный за последние кадры угол поворота камеры
 		double _headAppliedX = 1e9, _headAppliedY = 1e9, _headAppliedZ = 1e9;
 		double _headAppliedDirX = 1e9, _headAppliedDirY = 1e9, _headAppliedDirZ = 1e9;
 
@@ -224,6 +230,12 @@ namespace Snake3DViewer
 		std::vector<gp_Pnt>* _mineBase;
 		std::vector<Handle(AIS_Shape)>* _mineFree;   // пул переиспользуемых мин
 
+		//-- Лабиринт -- 
+		std::vector<Handle(AIS_Shape)>* _labRings;   // кольца коридора
+		gp_Ax2* _labAxis;							 // ось коридора: вход + направление
+		std::map<int, double>* _labState;			 // id сущности → пройденная глубина
+		bool _labOpen;
+
 		// ── 2.10 Загруженные STEP-модели (индексы kind) ──
 		std::vector<TopoDS_Shape*>* _models;            // 0=голова, 1=хвост, 2=кристалл, 4=мина
 
@@ -236,8 +248,12 @@ namespace Snake3DViewer
 		// Кэш подсвеченных ячеек: ключ → грань. Грань создаётся один раз,
 		// дальше только Display/Erase — дешёвые операции.
 		std::map<long long, Handle(AIS_Shape)>* _highlights;
+		std::map<long long, double>* _highlightLevels;   // уровни подсветки (guard)
+
 		double _arenaHalf;  // половина арены (границы подсветки)
 		double _cellSize;   // шаг сетки = размер ячейки
+
+		double _halfExtent = 50.0;
 
 		// ── 2.12 Анимация ──
 		double _spinAngle = 0.0;
@@ -251,7 +267,7 @@ namespace Snake3DViewer
 		int _dbgTrsfOther = 0;
 		int _frameDirty = 0;   // счётчик изменений сцены за кадр
 		System::DateTime _dbgTrsfLast = System::DateTime::UtcNow;
-		
+				
 		// ── 2.13 Снаряды, дула пушек, прицел, пикап оружия ──
 		// Снаряды: плотные векторы — C# владеет индексами, RemoveProjectileAt
 		// делает erase, как у кристаллов и мин. Позиции храним сами:
@@ -260,6 +276,7 @@ namespace Snake3DViewer
 		std::vector<Handle(AIS_Shape)>* _projectiles;
 		std::vector<gp_Pnt>* _projectilePos;
 		std::vector<gp_Vec>* _projectileDirs;
+		std::vector<gp_Pnt>* _projApplied;   // последняя применённая позиция (guard)
 
 		//Цвет по умолчанию: меняет кастомайзер.
 		double _projR = 1.00, _projG = 0.72, _projB = 0.20;
@@ -283,6 +300,8 @@ namespace Snake3DViewer
 		std::vector<gp_Pnt>* _weaponBase;
 		std::vector<Handle(AIS_Shape)>* _weaponShells;
 
+		bool _cullEnabled = true;
+
 	public:
 		// ═══════════════════════════════════════════════════════════════
 		// БЛОК 3. ЖИЗНЕННЫЙ ЦИКЛ: конструктор, деструктор, финализатор
@@ -300,6 +319,7 @@ namespace Snake3DViewer
 			_walls = new std::vector<Handle(AIS_Shape)>();
 			_grid = new std::vector<Handle(AIS_Shape)>();
 			_highlights = new std::map<long long, Handle(AIS_Shape)>();
+			_highlightLevels = new std::map<long long, double>();
 			_stars = new std::vector<Handle(AIS_Shape)>();
 			_basePositions = new std::vector<gp_Pnt>();
 			_positions = new std::vector<gp_Pnt>();
@@ -321,6 +341,11 @@ namespace Snake3DViewer
 			_crystalHalos = new std::vector<Handle(AIS_Shape)>();
 			_shipShield() = NULL;
 
+			_labRings = new std::vector<Handle(AIS_Shape)>();
+			_labAxis = new gp_Ax2();
+			_labState = new std::map<int, double>();
+			_labOpen = false;
+
 			_boosts = new std::vector<Handle(AIS_Shape)>();
 			_boostBase = new std::vector<gp_Pnt>();
 			_boostShells = new std::vector<Handle(AIS_Shape)>();
@@ -336,6 +361,7 @@ namespace Snake3DViewer
 			_projectiles = new std::vector<Handle(AIS_Shape)>();
 			_projectilePos = new std::vector<gp_Pnt>();
 			_projectileDirs = new std::vector<gp_Vec>();
+			_projApplied = new std::vector<gp_Pnt>();
 			_muzzleLocal = new std::map<int, gp_XYZ>();
 			_gunScale = new std::map<int, double>();
 			_weapons = new std::vector<Handle(AIS_Shape)>();
@@ -367,6 +393,7 @@ namespace Snake3DViewer
 			delete _walls;
 			delete _grid;   _grid = nullptr;
 			delete _highlights;   _highlights = nullptr;
+			delete _highlightLevels;   _highlightLevels = nullptr;
 			delete _stars;   _stars = nullptr;
 			delete _basePositions; _basePositions = nullptr;
 			delete _positions; _positions = nullptr;
@@ -401,11 +428,16 @@ namespace Snake3DViewer
 			delete _projectiles;    _projectiles = nullptr;
 			delete _projectilePos;  _projectilePos = nullptr;
 			delete _projectileDirs; _projectileDirs = nullptr;
+			delete _projApplied;	_projApplied = nullptr;
 			delete _muzzleLocal;    _muzzleLocal = nullptr;
 			delete _gunScale;		_gunScale = nullptr;
 			delete _weapons;        _weapons = nullptr;
 			delete _weaponBase;     _weaponBase = nullptr;
 			delete _weaponShells;   _weaponShells = nullptr;
+
+			delete _labRings;  _labRings = nullptr;
+			delete _labAxis;   _labAxis = nullptr;
+			delete _labState;  _labState = nullptr;
 		}
 
 		!SnakeSceneProxy()
@@ -414,6 +446,7 @@ namespace Snake3DViewer
 			delete _walls;
 			delete _grid;   _grid = nullptr;
 			delete _highlights;   _highlights = nullptr;
+			delete _highlightLevels;   _highlightLevels = nullptr;
 			delete _stars;   _stars = nullptr;
 			delete _basePositions; _basePositions = nullptr;
 			delete _positions; _positions = nullptr;
@@ -448,13 +481,20 @@ namespace Snake3DViewer
 			delete _projectiles;    _projectiles = nullptr;
 			delete _projectilePos;  _projectilePos = nullptr;
 			delete _projectileDirs; _projectileDirs = nullptr;
+			delete _projApplied;	_projApplied = nullptr;
 			delete _muzzleLocal;    _muzzleLocal = nullptr;
 			delete _gunScale;		_gunScale = nullptr;
 			delete _weapons;        _weapons = nullptr;
 			delete _weaponBase;     _weaponBase = nullptr;
 			delete _weaponShells;   _weaponShells = nullptr;
+
+			delete _labRings;  _labRings = nullptr;
+			delete _labAxis;   _labAxis = nullptr;
+			delete _labState;  _labState = nullptr;
 		}
 
+
+		void SetCullEnabled(bool on) { _cullEnabled = on; }
 		// ═══════════════════════════════════════════════════════════════
 		// БЛОК 4. ЗАГРУЗКА STEP-МОДЕЛЕЙ
 		// ═══════════════════════════════════════════════════════════════
@@ -781,6 +821,10 @@ namespace Snake3DViewer
 			RemoveWeapon();
 			SetCrosshair(false, 0.0, 0.0, 0.0, 0.0);
 
+			//Лабиринт
+			CloseLabyrinth();
+			_labState->clear();
+
 			if (!_aisContext().IsNull())
 				_aisContext()->UpdateCurrentViewer();
 			_frameDirty++;
@@ -959,10 +1003,10 @@ namespace Snake3DViewer
 			// Guard clause: позиция и спин не менялись — шейп уже актуален.
 			// Обновляем только служебные данные и выходим, Redraw не пачкаем.
 			const gp_Pnt& applied = (*_segApplied)[index];
-			if (std::abs(newPos.X() - applied.X()) < 1e-9 &&
-				std::abs(newPos.Y() - applied.Y()) < 1e-9 &&
-				std::abs(newPos.Z() - applied.Z()) < 1e-9 &&
-				std::abs(_spinAngle - _segAppliedSpin) < 1e-9)
+			if (abs(newPos.X() - applied.X()) < 1e-9 &&
+				abs(newPos.Y() - applied.Y()) < 1e-9 &&
+				abs(newPos.Z() - applied.Z()) < 1e-9 &&
+				abs(_spinAngle - _segAppliedSpin) < 1e-9)
 				return;   // позиция уже записана выше
 
 			// Направление сегмента — на предыдущий (головной) сегмент цепочки.
@@ -979,15 +1023,44 @@ namespace Snake3DViewer
 				}
 			}
 
-			// Куллинг: вне конуса камеры служебное состояние держим свежим,
-			// а трансформацию не трогаем; применённое сбрасываем в sentinel —
-			// вернувшись в кадр, сегмент мгновенно встанет в актуальную позицию.
-			if (!InView(newPos.X(), newPos.Y(), newPos.Z(), 1e9))
-			{
-				(*_segApplied)[index] = gp_Pnt(1e18, 1e18, 1e18);
-				return;
-			}
+			////// Куллинг: вне конуса камеры служебное состояние держим свежим,
+			////// а трансформацию не трогаем; применённое сбрасываем в sentinel —
+			////// вернувшись в кадр, сегмент мгновенно встанет в актуальную позицию.
+			////// ВРЕМЕННО: детектор призрака — заморозка видимого сегмента
+			//if (!InView(newPos.X(), newPos.Y(), newPos.Z(), 1e9))
+			//{
+			//	const gp_Pnt& applied = (*_segApplied)[index];
+			//	if (applied.X() < 1e17 && InView(applied.X(), applied.Y(), applied.Z(), 1e9))
+			//		System::Diagnostics::Trace::WriteLine(System::String::Format(
+			//			"[Призрак] слот {0} застыл видимым: applied=({1:F1},{2:F1},{3:F1})",
+			//			index, applied.X(), applied.Y(), applied.Z()));
+			//}
+			//
+			//// Куллинг: заморозка безопасна, только если ЗАСТЫВШАЯ точка — то,
+			//// что сейчас на экране, — тоже вне конуса. Проверка одной новой
+			//// позиции замораживала сегмент, видимый на старом месте: в кабине
+			//// глаз в 2 юнитах от головы, соседние сегменты меняют угловое
+			//// положение за тик на 10-15° — больше запаса конуса (70°).
+			//// Sentinel 1e18 в _segApplied безопасен: InView от него false,
+			//// поэтому только что размороженный сегмент не блокирует апдейт.
+			//// const gp_Pnt& applied = (*_segApplied)[index];
+			////if (!InView(newPos.X(), newPos.Y(), newPos.Z(), 1e9, kSegRadius) &&
+			////	!InView(applied.X(), applied.Y(), applied.Z(), 1e9, kSegRadius))
+			////	return;   // обе точки вне конуса — застывший шейп гарантированно за кадром
 
+			//// Средняя точка пути: при высокой скорости (буст) сегмент может
+			//// пролететь СКВОЗЬ конус — обе крайние точки вне кадра, а сам
+			//// отрезок пути через конус прошёл. Третья точка посередине хорды
+			//// ловит такие пролёты дёшево (одна лишняя проверка).
+			//static const double kSegRadius = 2.5;			// габаритный радиус сегмента
+			//const double midX = 0.5 * (newPos.X() + applied.X());
+			//const double midY = 0.5 * (newPos.Y() + applied.Y());
+			//const double midZ = 0.5 * (newPos.Z() + applied.Z());
+			//if (!InView(newPos.X(), newPos.Y(), newPos.Z(), 1e9, kSegRadius) &&
+			//	!InView(applied.X(), applied.Y(), applied.Z(), 1e9, kSegRadius) &&
+			//	!InView(midX, midY, midZ, 1e9, kSegRadius))
+			//	return;
+			
 			gp_Trsf trsf;
 			gp_Vec dir = (*_segmentDirs)[index];
 
@@ -1066,6 +1139,13 @@ namespace Snake3DViewer
 				_shipShield()->SetLocalTransformation(trsf.Multiplied(spin));
 			}
 
+			if (_shipBoostOn && !_shipBoost().IsNull())
+			{
+				gp_Trsf spin;
+				spin.SetRotation(gp_Ax1(gp_Pnt(0, 0, 0), gp_Dir(0, 0, 1)), _spinAngle);
+				_shipBoost()->SetLocalTransformation(trsf.Multiplied(spin));
+			}
+
 			(*_snakeSegments)[headIndex]->SetLocalTransformation(trsf);	
 			_headAppliedX = newPos.X(); _headAppliedY = newPos.Y(); _headAppliedZ = newPos.Z();
 			_headAppliedDirX = _dirX; _headAppliedDirY = _dirY; _headAppliedDirZ = _dirZ;
@@ -1141,6 +1221,7 @@ namespace Snake3DViewer
 
 		void CreateWalls(double arenaSize)
 		{
+			_halfExtent = arenaSize / 2.0;
 			double half = arenaSize / 2.0;
 			double thickness = 1.0;
 
@@ -1253,6 +1334,7 @@ namespace Snake3DViewer
 		{
 			if (_aisContext().IsNull() || _view().IsNull()) return;
 
+			_halfExtent = arenaSize / 2.0;
 			double half = arenaSize / 2.0;
 
 			for (double s = -half; s <= half + 0.01; s += step)
@@ -1399,6 +1481,15 @@ namespace Snake3DViewer
 
 			Handle(AIS_Shape) ais = it->second;
 			if (ais.IsNull()) return;
+
+			// Guard: уровень не изменился — Display не зовём. Подсветка живёт
+			// на каждом тике по каждой ячейке: без guard это сотни ложных
+			// обновлений презентации в секунду.
+			auto lvl = _highlightLevels->find(key);
+			if (lvl != _highlightLevels->end() &&
+				std::abs(level - lvl->second) < 0.01)
+				return;
+			(*_highlightLevels)[key] = level;
 
 			ais->SetTransparency(0.85 - 0.65 * level);
 			// Display после Erase: погашенная ячейка из кэша снова на сцене
@@ -1564,6 +1655,10 @@ namespace Snake3DViewer
 		// Ориентирует все кристаллы 
 		void UpdateCrystalOrientations()
 		{
+			static const double kCrystalRadius = 1.5;   // кристалл + ореол
+			static const double kSuperRadius = 3.0;     // супер-кристалл с оболочкой
+			static const double kShellRadius = 4.0;     // щиты и бусты — сферы вокруг корабля
+
 			if (_aisContext().IsNull()) return;
 			if (_crystals->empty() && _superCrystals->empty() &&
 				_shields->empty() && _boosts->empty() && _weapons->empty()) return;
@@ -1616,7 +1711,7 @@ namespace Snake3DViewer
 
 				// Спящий кристалл (вне конуса камеры): матрицу не трогаем.
 				// Проснувшись, подхватит текущий _spinAngle — отставание максимум кадр.
-				if (!InView(pos.X(), pos.Y(), pos.Z(), 50.0)) continue;
+				if (!InView(pos.X(), pos.Y(), pos.Z(), 50.0, kCrystalRadius)) continue;
 
 				//Метод SetValues принимает матрицу по строкам.
 				//Первые три столбца — базис локальной системы координат
@@ -1644,7 +1739,7 @@ namespace Snake3DViewer
 
 				gp_Pnt pos = (*_superBase)[i];
 
-				if (!InView(pos.X(), pos.Y(), pos.Z(), 50.0)) continue;
+				if (!InView(pos.X(), pos.Y(), pos.Z(), 50.0, kSuperRadius)) continue;
 
 				gp_Trsf trsf;
 				trsf.SetValues(
@@ -1664,7 +1759,7 @@ namespace Snake3DViewer
 				if ((*_superSpheres)[i].IsNull()) continue;
 
 				gp_Pnt pos = (*_superBase)[i];
-				if (!InView(pos.X(), pos.Y(), pos.Z(), 50.0)) continue;
+				if (!InView(pos.X(), pos.Y(), pos.Z(), 50.0, kShellRadius)) continue;
 
 				gp_Trsf trsf;
 				trsf.SetValues(
@@ -1681,7 +1776,7 @@ namespace Snake3DViewer
 			{
 				if ((*_shields)[i].IsNull()) continue;
 				gp_Pnt pos = (*_shieldBase)[i];
-				if (!InView(pos.X(), pos.Y(), pos.Z(), 50.0)) continue;
+				if (!InView(pos.X(), pos.Y(), pos.Z(), 50.0, kShellRadius)) continue;
 
 				gp_Trsf trsf;
 				trsf.SetValues(
@@ -1700,7 +1795,7 @@ namespace Snake3DViewer
 			{
 				if ((*_boosts)[i].IsNull()) continue;
 				gp_Pnt pos = (*_boostBase)[i];
-				if (!InView(pos.X(), pos.Y(), pos.Z(), 50.0)) continue;
+				if (!InView(pos.X(), pos.Y(), pos.Z(), 50.0, kShellRadius)) continue;
 
 				gp_Trsf trsf;
 				trsf.SetValues(
@@ -1719,7 +1814,7 @@ namespace Snake3DViewer
 			{
 				if ((*_weapons)[i].IsNull()) continue;
 				gp_Pnt pos = (*_weaponBase)[i];
-				if (!InView(pos.X(), pos.Y(), pos.Z(), 50.0)) continue;
+				if (!InView(pos.X(), pos.Y(), pos.Z(), 50.0, kShellRadius)) continue;
 
 				gp_Trsf trsf;
 				trsf.SetValues(
@@ -1730,7 +1825,7 @@ namespace Snake3DViewer
 
 				if (i < _weaponShells->size() && !(*_weaponShells)[i].IsNull())
 					(*_weaponShells)[i]->SetLocalTransformation(trsf);
-				_dbgTrsfOther++; _frameDirty;
+				_dbgTrsfOther++; _frameDirty++;
 			}			
 		}
 
@@ -2314,6 +2409,7 @@ namespace Snake3DViewer
 				aisShape = new AIS_Shape(*model);
 				aisShape->SetColor(Quantity_Color(_projR, _projG, _projB, Quantity_TOC_RGB));
 				aisShape->SetTransparency(0.0);
+
 			}
 			else
 			{
@@ -2350,17 +2446,46 @@ namespace Snake3DViewer
 			if (index >= (int)_projectiles->size())    _projectiles->resize(index + 1);
 			if (index >= (int)_projectilePos->size())  _projectilePos->resize(index + 1, gp_Pnt(0, 0, 0));
 			if (index >= (int)_projectileDirs->size()) _projectileDirs->resize(index + 1, gp_Vec(0, 1, 0));
+			if (index >= (int)_projApplied->size())    _projApplied->resize(index + 1, gp_Pnt(1e18, 1e18, 1e18));
+			//(*_projApplied)[index] = center;
 			(*_projectiles)[index] = aisShape;
 			(*_projectilePos)[index] = center;
 			(*_projectileDirs)[index] = gp_Vec(dirX, dirY, dirZ);
 
-			if (model == nullptr)
+			if (model != nullptr)
 			{
-				// Компаунд строится вокруг нуля: перенос в точку спавна сразу,
-				// как у кристаллов — до первого кадра болт не висит в origin
+				// Модель: не вертим, только перенос в точку спавна.
+				// Без переноса shape живёт в origin — в центре корабля (кастомайзер).
 				gp_Trsf trans;
 				trans.SetTranslation(gp_Vec(gp_Pnt(0, 0, 0), center));
 				aisShape->SetLocalTransformation(trans);
+			}
+			else
+			{
+				// Фолбэк: болт строится вокруг нуля — перенос + разворот по курсу,
+				// тот же базис right/fwd/up, что в MoveProjectile
+				gp_Vec dir = (*_projectileDirs)[index];
+				double len = dir.Magnitude();
+				gp_Trsf trsf;
+
+				if (len > 1e-6)
+				{
+					gp_Dir fwd(dir);
+					gp_Dir upRef(0, 0, 1);
+					if (std::abs(fwd.Z()) > 0.999) upRef = gp_Dir(0, 1, 0);
+
+					gp_Dir right = fwd.Crossed(upRef);
+					gp_Dir up = gp_Dir(right.Crossed(fwd));
+
+					trsf.SetValues(
+						right.X(), fwd.X(), up.X(), center.X(),
+						right.Y(), fwd.Y(), up.Y(), center.Y(),
+						right.Z(), fwd.Z(), up.Z(), center.Z());
+				}
+				else
+					trsf.SetTranslation(gp_Vec(gp_Pnt(0, 0, 0), center));
+
+				aisShape->SetLocalTransformation(trsf);
 			}
 
 			// Выстрелов за кадр может быть несколько — перерисовка общая,
@@ -2377,6 +2502,25 @@ namespace Snake3DViewer
 		{
 			if (index < 0 || index >= (int)_projectiles->size()) return;
 			if ((*_projectiles)[index].IsNull()) return;
+
+			// Страховка: если кэш короче списка (кто-то создал снаряд мимо
+			// AddProjectileAt), добираем записи до индекса вместо падения/сноса.
+			while ((int)_projApplied->size() <= index)      _projApplied->push_back(gp_Pnt(1e9, 1e9, 1e9));
+			while ((int)_projectilePos->size() <= index)    _projectilePos->push_back(gp_Pnt(x, y, z));
+			while ((int)_projectileDirs->size() <= index)   _projectileDirs->push_back(gp_Vec(0, 0, 1));
+
+			// Guard: позиция не изменилась — матрица уже актуальна. Без него
+			// интерполяция в паузе/gameover пачкала вью каждый кадр, и
+			// ленивый Redraw не мог скипнуть.
+			if (index < (int)_projApplied->size())
+			{
+				const gp_Pnt& applied = (*_projApplied)[index];
+				if (std::abs(x - applied.X()) < 1e-9 &&
+					std::abs(y - applied.Y()) < 1e-9 &&
+					std::abs(z - applied.Z()) < 1e-9)
+					return;
+			}
+			(*_projApplied)[index] = gp_Pnt(x, y, z);
 
 			gp_Pnt newPos(x, y, z);
 			(*_projectilePos)[index] = newPos;
@@ -2408,7 +2552,16 @@ namespace Snake3DViewer
 
 		void RemoveProjectileAt(int index)
 		{
-			if (index < 0 || index >= (int)_projectiles->size()) return;
+			if (index < 0) return;
+
+			// Проверка на существование векторов
+			if (!_projectiles || !_projectilePos || !_projectileDirs || !_projApplied)
+				return;
+
+			// Bounds check: индекс может указывать за конец списка,
+			// если снаряды уже частично удалены — доступ был бы out of bounds
+			if (index >= (int)_projectiles->size()) return;
+
 			if (!(*_projectiles)[index].IsNull() && !_aisContext().IsNull())
 				_aisContext()->Erase((*_projectiles)[index], Standard_False);
 			_projectiles->erase(_projectiles->begin() + index);
@@ -2416,17 +2569,27 @@ namespace Snake3DViewer
 				_projectilePos->erase(_projectilePos->begin() + index);
 			if (index < (int)_projectileDirs->size())
 				_projectileDirs->erase(_projectileDirs->begin() + index);
+			if (index < (int)_projApplied->size())                      
+				_projApplied->erase(_projApplied->begin() + index);
 			_frameDirty++;
 		}
 
 		void ClearProjectiles()
 		{
+			// ЗАЩИТА: если вектор не создан — просто выходим
+			if (!_projectiles || !_projectilePos || !_projectileDirs || !_projApplied)
+			{
+				System::Diagnostics::Trace::WriteLine("[WARN] ClearProjectiles: один из векторов не инициализирован (nullptr)!");
+				return;
+			}
+
 			for (auto& p : *_projectiles)
 				if (!p.IsNull() && !_aisContext().IsNull())
 					_aisContext()->Erase(p, Standard_False);
 			_projectiles->clear();
 			_projectilePos->clear();
 			_projectileDirs->clear();
+			_projApplied->clear();
 			_frameDirty++;
 		}
 
@@ -2499,7 +2662,9 @@ namespace Snake3DViewer
 
 			if (_frameDirty == 0)
 			{
+				_aisContext()->UpdateCurrentViewer(); 
 				++dbgSkipped;
+				return;
 			}
 			else
 			{
@@ -2522,8 +2687,7 @@ namespace Snake3DViewer
 				dbgRedraw = dbgSkipped = 0;
 				_dbgTrsfLast = System::DateTime::UtcNow;
 			}
-		}
-		
+		}		
 
 		void FitScene()
 		{
@@ -2572,11 +2736,16 @@ namespace Snake3DViewer
 		void ToggleViewMode()
 		{
 			_viewMode = (_viewMode == 0) ? 1 : 0;
+			_viewMode == 1 ? SetCockpitHide(true) : SetCockpitHide(false);
 		}
 
 		void SetViewMode(int mode)
 		{
-			if (mode == 0 || mode == 1) _viewMode = mode;
+			if (mode == 0 || mode == 1)
+			{
+				_viewMode = mode;
+				_viewMode == 1 ? SetCockpitHide(true) : SetCockpitHide(false);
+			}
 		}
 
 		bool IsCockpitView() { return _viewMode == 1; }
@@ -2623,13 +2792,62 @@ namespace Snake3DViewer
 			// интерполяция позиций змейки на стороне C#.
 			Handle(Graphic3d_Camera) cam = _view()->Camera();
 
+			// Долг поворота: сколько камера довернула за последние кадры.
+			// Куллинг добавляет его к конусу — заморозка учитывает довернувшуюся
+			// камеру, иначе объект, честно замороженный за конусом, после
+			// поворота оказывается краем в кадре (остаточные призраки в кабине).
+			// Ставим здесь, до веток jump/lerp: долг должен считаться каждый кадр,
+			// даже когда guard ниже прерывает метод.
+			gp_Vec fdNow(cam->Eye(), cam->Center());
+			if (fdNow.Magnitude() > 1e-12)   // свежая камера: глаз == центр — пропускаем кадр
+				fdNow.Normalize();
+			else
+				fdNow = gp_Vec(0.0, 0.0, 1.0);
+			//fdNow.Normalize();
+			static double s_prevFx = 0.0, s_prevFy = 0.0, s_prevFz = 0.0;
+			static bool s_prevValid = false;
+			if (s_prevValid)
+			{
+				double d = fdNow.X() * s_prevFx + fdNow.Y() * s_prevFy + fdNow.Z() * s_prevFz;
+				if (d < 1.0)
+					_camDebt = min(_camDebt + acos(max(-1.0, min(1.0, d))), 1.0);
+			}
+			s_prevValid = true;
+			s_prevFx = fdNow.X(); s_prevFy = fdNow.Y(); s_prevFz = fdNow.Z();
+			_camDebt *= 0.9;   // затухание: камера перестала крутиться — долг стекает
+
 			// FOV меняется только со сменой режима — не ставим его каждый кадр
 			static double s_lastFov = -1.0;
-			if (std::abs(fov - s_lastFov) > 1e-9)
+			if (abs(fov - s_lastFov) > 1e-9)
 			{
 				cam->SetFOVy(fov);
 				s_lastFov = fov;
 			}
+
+			// Плоскости отсечения: в кабине глаз в 2 юнитах от головы,
+			// сегменты ботов пролетают вплотную — дефолтный zNear (порядка
+			// единицы) срезал геометрию у глаза («проваливается и появляется»).
+			// Ставим ближнюю плоскость на 0.05 юнита — ближе к глазу ничего
+			// не срезается, точность глубины страдает незначительно при far ~1000.
+			// Плоскости отсечения: сверяемся с фактическим состоянием камеры,
+			// а не со статикой — если камеру пересоздали (ресайз, пауза, меню),
+			// дефолтный zNear вернётся, и нужно переставить плоскость заново.
+			if (abs(cam->ZNear() - 0.075) > 1e-6 ||
+				abs(cam->ZFar() - 1000.0) > 1e-6)
+			{
+				cam->SetZRange(0.075, 1000.0);
+				_frameDirty++;
+			}
+
+			// ПРАВКА 1: смена режима и snap — мгновенная установка камеры.
+			// Без этого лерп-камера «дотекает» от старого ракурса: глаз при
+			// переключении вида едет из старой точки, а конус куллинга за
+			// этот кадр уже посчитан по новой оси — рассинхрон.
+			static int s_lastMode = -1;
+			static bool s_lastSnap = false;
+			bool jump = (_viewMode != s_lastMode) || (snap && !s_lastSnap);
+			s_lastMode = _viewMode;
+			s_lastSnap = snap;
 
 			// Eye = голова - forward*camBack + up*camUp
 			double desiredEyeX = cx - _dirX * camBack + _upX * camUp;
@@ -2641,14 +2859,26 @@ namespace Snake3DViewer
 			double desiredAtY = cy + _dirY * lookAhead;
 			double desiredAtZ = cz + _dirZ * lookAhead;
 
-			// 3. Текущие позиции
-			//Handle(Graphic3d_Camera) cam = _view()->Camera();
+			if (jump)
+			{
+				// Мгновенный прыжок: режим сменился или это снап после ресета
+				cam->SetEye(gp_Pnt(desiredEyeX, desiredEyeY, desiredEyeZ));
+				cam->SetCenter(gp_Pnt(desiredAtX, desiredAtY, desiredAtZ));
+				cam->SetUp(gp_Dir(_upX, _upY, _upZ));
+				_camDebt = 0.0;   // телепорт камеры — накопленный долг недействителен
+				_frameDirty++;
+				_camEyeX = desiredEyeX; _camEyeY = desiredEyeY; _camEyeZ = desiredEyeZ;
+				_camDirX = _dirX; _camDirY = _dirY; _camDirZ = _dirZ;
+				return;
+			}
+
+			// 3. Текущие позиции			
 			gp_Pnt currentEye = cam->Eye();
 			gp_Pnt currentAt = cam->Center();
 
-			// 4. Lerp — запаздывание камеры
-			//double speed = 0.08;
-
+			// Лерп глаза. Центр лерпим ТОЖЕ (правка 2): раньше newAt
+			// вычислялся и выбрасывался — в SetCenter уходил мгновенный
+			// desiredAt, взгляд дёргался относительно отстающего глаза.
 			double newEyeX = currentEye.X() + (desiredEyeX - currentEye.X()) * lerpSpeed;
 			double newEyeY = currentEye.Y() + (desiredEyeY - currentEye.Y()) * lerpSpeed;
 			double newEyeZ = currentEye.Z() + (desiredEyeZ - currentEye.Z()) * lerpSpeed;
@@ -2673,14 +2903,31 @@ namespace Snake3DViewer
 				return;
 			s_lastUpX = _upX; s_lastUpY = _upY; s_lastUpZ = _upZ;
 
-			// 5. Применение: позиция + вектор up (камера вращается с кораблём)
+			// ПРАВКА 3: ставим ЛЕРПНУТЫЙ центр, а не мгновенный desiredAt
 			cam->SetEye(gp_Pnt(newEyeX, newEyeY, newEyeZ));
-			cam->SetCenter(gp_Pnt(desiredAtX, desiredAtY, desiredAtZ));
+			cam->SetCenter(gp_Pnt(newAtX, newAtY, newAtZ));
 			cam->SetUp(gp_Dir(_upX, _upY, _upZ));
 			_frameDirty++;
 
 			_camEyeX = newEyeX; _camEyeY = newEyeY; _camEyeZ = newEyeZ;
-			_camDirX = _dirX;   _camDirY = _dirY;   _camDirZ = _dirZ;			
+			_camDirX = _dirX;   _camDirY = _dirY;   _camDirZ = _dirZ;
+		}
+
+		// Кабина: первые 2 сегмента хвоста проходят сквозь глаз
+		// (глаз в 2.24 юнита от центра головы, сегменты на шаге ~2-2.5).
+		// Они перекрывают корпус в кадре и мерцают при пересечении глаза.
+		// В кабине скрываем, в следящей камере показываем.
+		void SetCockpitHide(bool on)
+		{
+			if (_aisContext().IsNull()) return;
+			for (int i = 1; i <= 7 && i < static_cast<int>(_snakeSegments->size()); ++i)
+			{
+				if ((*_snakeSegments)[i].IsNull()) continue;
+				if (on) _aisContext()->Erase((*_snakeSegments)[i], Standard_False);
+				else    _aisContext()->Display((*_snakeSegments)[i], Standard_False);
+			}
+			_frameDirty++;
+			_aisContext()->UpdateCurrentViewer();
 		}
 
 		// ═══════════════════════════════════════════════════════════════
@@ -2717,8 +2964,19 @@ namespace Snake3DViewer
 			return true;
 		}
 
+		bool InView(double px, double py, double pz)
+		{
+			return InView(px, py, pz, 1e9, 0.0);
+		}
+
 		bool InView(double px, double py, double pz, double maxDist)
 		{
+			return InView(px, py, pz, maxDist, 0.0);
+		}
+
+		bool InView(double px, double py, double pz, double maxDist, double objRadius)
+		{
+			if (!_cullEnabled) return true;
 			if (_view().IsNull()) return true;   // камеры нет — не отсекаем
 
 			Handle(Graphic3d_Camera) cam = _view()->Camera();
@@ -2734,8 +2992,17 @@ namespace Snake3DViewer
 			if (dist > maxDist) return false;
 			if (dist < 1e-9) return true;
 
-			// cos(70°) ≈ 0.342 — конус с запасом вокруг реального FOV ~60°
-			return (dx * fwd.X() + dy * fwd.Y() + dz * fwd.Z()) / dist > 0.342;
+			// Угловой радиус объекта: сфера радиуса R на дистанции dist торчит
+			// в конус на угол asin(R/dist). Конус расширяется на него — заморозка
+			// безопасна, только если вся сфера вне кадра, а не только её центр.
+			// Для близких объектов (R/dist -> 1) asin -> 90°, порог уходит ниже
+			// нуля — объект всегда считается видимым и всегда обновляется.
+			double alpha = asin(min(1.0, objRadius / dist));
+			// + _camDebt: запас на поворот камеры между тиками — объект,
+			// замороженный с этим запасом, не войдёт в кадр при доверте.
+			double limit = cos((70.0 * M_PI / 180.0) + alpha + _camDebt);
+
+			return (dx * fwd.X() + dy * fwd.Y() + dz * fwd.Z()) / dist > limit;
 		}
 		
 		// ═══════════════════════════════════════════════════════════════
@@ -2854,14 +3121,33 @@ namespace Snake3DViewer
 			double fx, double fy, double fz,
 			double ux, double uy, double uz)
 		{
-			const int base = 60 + botId * 10;
-			const int stride = 10;
+			if (botId < 0 || botId > 3) return;
 
-			// Слот головы бота — как у игрока: позицию и направление держим
-			// свежими, от них первый видимый сегмент (слот +2) строит ориентацию.
-			// Блоки ботов: 10000 + botId*512 (BotSnake.GlobalId).
-			const int kBotBase = 10000;   // GameConfig.Bot.SegmentIdBase
-			const int kBotStride = 512;   // GameConfig.Bot.IdStride
+			// Guard per-bot: у каждого бота своя ячейка статики. Общие статики
+			// не годятся — боты затирали друг друга, и корабль мог «исчезнуть»,
+			// если два бота попадали в одинаковый кадр.
+			static double s_last[4][9];
+			static bool s_init = false;
+			if (!s_init)
+			{
+				for (int b = 0; b < 4; ++b)
+					for (int k = 0; k < 9; ++k) s_last[b][k] = 1e9;
+				s_init = true;
+			}
+			double* l = s_last[botId];
+			if (std::abs(x - l[0]) < 1e-9 && std::abs(y - l[1]) < 1e-9 &&
+				std::abs(z - l[2]) < 1e-9 && std::abs(fx - l[3]) < 1e-9 &&
+				std::abs(fy - l[4]) < 1e-9 && std::abs(fz - l[5]) < 1e-9 &&
+				std::abs(ux - l[6]) < 1e-9 && std::abs(uy - l[7]) < 1e-9 &&
+				std::abs(uz - l[8]) < 1e-9)
+				return;
+			l[0] = x; l[1] = y; l[2] = z; l[3] = fx; l[4] = fy; l[5] = fz;
+			l[6] = ux; l[7] = uy; l[8] = uz;
+
+			// Слоты головы бота держим свежими (от них первый видимый
+			// сегмент строит ориентацию). Это блоки СЕГМЕНТОВ: 10000 + botId*512.
+			const int kBotBase = 10000;
+			const int kBotStride = 512;
 			int headSlot = kBotBase + botId * kBotStride;
 
 			if (headSlot < static_cast<int>(_snakeSegments->size()) &&
@@ -2872,6 +3158,11 @@ namespace Snake3DViewer
 			}
 
 			gp_Trsf head = TrsfFromFrame(x, y, z, fx, fy, fz, ux, uy, uz);
+
+			// Части корабля — ДРУГИЕ id: 60 + botId*10 … +9. Фильтр по ним —
+			// только по base/stride, к сегментным блокам отношения не имеет.
+			const int base = 60 + botId * 10;
+			const int stride = 10;
 
 			for (NCollection_DataMap<int, Handle(AIS_Shape)>::Iterator it(*_shipParts);
 				it.More(); it.Next())
@@ -3083,9 +3374,84 @@ namespace Snake3DViewer
 			_frameDirty++;
 		}
 
+		// ═══════════════════════════════════════════════════════════════
+		// БЛОК 15.3 Разработка лабиринт - спавн оружия и здоровья, перезарядка
+		// ═══════════════════════════════════════════════════════════════
+		// _labRings — vector<Handle(AIS_Shape)>, _labAxis — gp_Ax2 входа,
+		// _labOpen — открыт ли лабиринт, _labOpenTime — когда открылся.
+		void OpenLabyrinth(double x, double y, double z,
+			double dirX, double dirY, double dirZ)
+		{
+			CloseLabyrinth();
+
+			gp_Dir fwd(dirX, dirY, dirZ);
+			*_labAxis = gp_Ax2(gp_Pnt(x, y, z), fwd);
+			gp_Dir upRef(0, 0, 1);
+			if (std::abs(fwd.Z()) > 0.999) upRef = gp_Dir(0, 1, 0);
+			gp_Dir right = fwd.Crossed(upRef);
+
+			for (int i = 0; i < LabRingCount; i++)
+			{
+				gp_Pnt c = gp_Pnt(x, y, z).Translated(gp_Vec(fwd) * (i * LabSpacing));
+				gp_Ax2 ringAxis(c, fwd);
+				BRepPrimAPI_MakeTorus mk(ringAxis, LabOuterR, LabOuterR * 0.85);
+
+				Handle(AIS_Shape) ring = new AIS_Shape(mk.Shape());
+				ring->SetColor(Quantity_Color(0.10, 0.80, 0.90, Quantity_TOC_RGB));
+				ring->SetTransparency(i == LabRingCount - 1 ? 0.2 : 0.55);
+				ring->SetDisplayMode(1);
+				_aisContext()->Display(ring, Standard_False);
+				_labRings->push_back(ring);
+			}
+			_labOpen = true;
+			_frameDirty++;
+		}
+
+		void CloseLabyrinth()
+		{
+			for (auto& r : *_labRings)
+				if (!r.IsNull() && !_aisContext().IsNull())
+					_aisContext()->Erase(r, Standard_False);
+			_labRings->clear();
+			_labOpen = false;
+			_frameDirty++;
+		}
+
+
+		//Детектор пролёта (он один на всех)
+		//Работает для игрока и ботов одинаково — проверяем координату на оси коридора и радиус от оси :
+		// Возвращает true, если объект прошёл коридор целиком: вошёл в первый
+		// тор, вышел за последний, не выходя из трубы ни в одном кольце.
+		// state сохраняется между кадрами по id игрока/бота — так детектор
+		// не сработает от простого пролёта мимо торца.
+		bool CheckLabyrinthPass(int objectId, double px, double py, double pz)
+		{
+			if (!_labOpen) return false;
+
+			gp_Vec axisDir(_labAxis->Direction());
+			gp_Vec v(_labAxis->Location(), gp_Pnt(px, py, pz));
+			double along = v.Dot(axisDir);
+			double off = (v - axisDir * along).Magnitude();
+			const double corridorR = LabOuterR + 1.0;
+			const double depth = LabRingCount * LabSpacing;
+
+			double& st = (*_labState)[objectId];
+			if (along > 0 && along < depth && off < corridorR)
+			{
+				st = max(st, along);			  // в трубе: копим глубину
+			}
+			else if (st > 0 && along >= depth)
+			{
+				st = 0.0;                         // дошёл до конца — refill
+				return true;
+			}
+			else if (off > corridorR * 1.5)
+				st = 0.0;                         // отлетел в сторону — прогресс сгорает
+			return false;
+		}
 
 		// ═══════════════════════════════════════════════════════════════
-		// БЛОК 15.3 Разработка космопорт - предпросмотр
+		// БЛОК 15.4 Разработка космопорт - предпросмотр
 		// ═══════════════════════════════════════════════════════════════
 		// Цвет хвоста по умолчанию для будущих AddSegment
 		void SetTailColor(double r, double g, double b)
@@ -3214,14 +3580,21 @@ namespace Snake3DViewer
 			for (NCollection_DataMap<int, Handle(AIS_Shape)>::Iterator it(*_shipParts);
 				it.More(); it.Next()) ++shipParts;
 
-			int highlights = 0;
-			for (auto& kv : *_highlights) if (!kv.second.IsNull()) ++highlights;
+			// Стены/сетка/подсветка живут в векторах и после Erase —
+			// честный счёт только через IsDisplayed.
+			int walls = 0, grid = 0, hl = 0;
+			for (auto& w : *_walls)
+				if (!w.IsNull() && _aisContext()->IsDisplayed(w)) ++walls;
+			for (auto& g : *_grid)
+				if (!g.IsNull() && _aisContext()->IsDisplayed(g)) ++grid;
+			for (auto& kv : *_highlights)
+				if (!kv.second.IsNull() && _aisContext()->IsDisplayed(kv.second)) ++hl;
 
 			System::Diagnostics::Trace::WriteLine(System::String::Format(
-				"[Аудит] сцена:   {0}  | игрок:    {1} | боты:    {2} | части:       {3} |"
-					+ "| крист:   {4}  | ореолы :  {5} | супер :  {6} | обол :       {7} |"
-					+ "| мины :   {8}  | снаряды : {9} | щиты :  {10} | бусты :     {11} |"
-					+ "| пикапы : {12} | стены :  {13} | сетка : {14} | подсветка : {15}",
+				"[Аудит] сцена: {0} | игрок: {1} | боты: {2} | части: {3} | "
+				"крист: {4} | ореолы: {5} | супер: {6} | обол: {7} | "
+				"мины: {8} | снаряды: {9} | щиты: {10} | бусты: {11} | "
+				"пикапы: {12} | стены: {13} | сетка: {14} | подсветка: {15}",
 				scene, segPlayer, segBots, shipParts,
 				CountAlive(_crystals),		CountAlive(_crystalHalos),
 				CountAlive(_superCrystals), CountAlive(_superSpheres),
@@ -3229,7 +3602,7 @@ namespace Snake3DViewer
 				CountAlive(_shields) +		CountAlive(_shieldShells),
 				CountAlive(_boosts) +		CountAlive(_boostShells),
 				CountAlive(_weapons) +		CountAlive(_weaponShells),
-				CountAlive(_walls),			CountAlive(_grid), highlights));
+				walls, grid, hl));
 		}
 	};
 }

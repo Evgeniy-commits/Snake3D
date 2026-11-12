@@ -54,13 +54,13 @@ namespace Snake3D
         public AudioService()
         {
             _music = new MediaPlayer();
-            _music.MediaEnded += MusicEnded;
+            _music.MediaEnded += MusicEnded!;
 
             _flight = new MediaPlayer();
-            _flight.MediaEnded += FlightEnded;
+            _flight.MediaEnded += FlightEnded!;
 
             _menuMusic = new MediaPlayer();
-            _menuMusic.MediaEnded += MenuEnded;
+            _menuMusic.MediaEnded += MenuEnded!;
 
             for (int i = 0; i < 8; ++i)
                 _sfxPool.Add(new MediaPlayer());
@@ -175,7 +175,7 @@ namespace Snake3D
         public void StartFlight()
         {
             _flightWanted = true;
-            if (!SfxEnabled || !_sfx.TryGetValue("engine", out string f)) return;
+            if (!SfxEnabled || !_sfx.TryGetValue("engine", out string? f)) return;
             _flight.Open(new Uri(f));
             _flight.Volume = SfxVolume * 0.7;   // гул потише эффектов
             _flight.Position = TimeSpan.Zero;
@@ -207,7 +207,7 @@ namespace Snake3D
 
         public void PlaySfx(string name)
         {
-            if (!SfxEnabled || !_sfx.TryGetValue(name, out string file)) return;
+            if (!SfxEnabled || !_sfx.TryGetValue(name, out string? file)) return;
 
             _sfxCount++;
             if ((DateTime.UtcNow - _lastSfxReport).TotalSeconds >= 1)

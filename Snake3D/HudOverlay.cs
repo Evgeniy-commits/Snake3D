@@ -136,7 +136,7 @@ namespace Snake3D
                     continue;
                 }
                 _crystalDots[i].Visibility = Visibility.Visible;
-                Canvas.SetLeft(_crystalDots[i], xs[i].Value - _crystalDots[i].Width / 2);
+                Canvas.SetLeft(_crystalDots[i], xs[i]!.Value - _crystalDots[i].Width / 2);
                 Canvas.SetTop(_crystalDots[i], ys[i] - _crystalDots[i].Height / 2);
             }
         }

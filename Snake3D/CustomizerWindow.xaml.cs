@@ -36,10 +36,10 @@ namespace Snake3D
             {
                 if (_viewport != null) return;
                 _viewport = new SnakeViewport();
-                _viewport.MouseDown += Viewport_MouseDown;
-                _viewport.MouseMove += Viewport_MouseMove;
-                _viewport.MouseUp += Viewport_MouseUp;
-                _viewport.MouseWheel += Viewport_Wheel;
+                _viewport.MouseDown += Viewport_MouseDown!;
+                _viewport.MouseMove += Viewport_MouseMove!;
+                _viewport.MouseUp += Viewport_MouseUp!;
+                _viewport.MouseWheel += Viewport_Wheel!;
                 Host.Child = _viewport;
                 Dispatcher.BeginInvoke(new Action(InitScene), DispatcherPriority.ApplicationIdle);
             };
@@ -220,8 +220,8 @@ namespace Snake3D
 
             var m = ship.MuzzleOffset[_muzzleGun];
             if (double.TryParse(MuzX.Text, System.Globalization.CultureInfo.InvariantCulture, out var x)) m[0] = x;
-            if (double.TryParse(MuzY.Text, System.Globalization.CultureInfo.InvariantCulture, out var y)) m[0] = y;
-            if (double.TryParse(MuzZ.Text, System.Globalization.CultureInfo.InvariantCulture, out var z)) m[0] = z;
+            if (double.TryParse(MuzY.Text, System.Globalization.CultureInfo.InvariantCulture, out var y)) m[1] = y;
+            if (double.TryParse(MuzZ.Text, System.Globalization.CultureInfo.InvariantCulture, out var z)) m[2] = z;
             //if (double.TryParse(MuzX.Text, out var x)) m[0] = x;
             //if (double.TryParse(MuzY.Text, out var y)) m[1] = y;
             //if (double.TryParse(MuzZ.Text, out var z)) m[2] = z;

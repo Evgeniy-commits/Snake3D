@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using static Snake3D.GameConfig;
 
 namespace Snake3D
 {
@@ -46,6 +47,18 @@ namespace Snake3D
             IReadOnlyList<Point3D> mines = game.Mines;
             IReadOnlyList<Point3D> crystals = game.Crystals;
             IReadOnlyList<Point3D> pickups = game.WeaponPickups;        // пикап оружия
+
+            Point3D? depotTarget = null;
+            if (game.LabyrinthOpen && (bot.Health < 2.0 || bot.Ammo == 0))
+            {
+                // цель — середина коридора, чтобы войти ровно по оси
+                depotTarget = new Point3D(
+                    game.LabEntry.X + game.LabAxis.X * Labyrinth.Spacing * 0.5,
+                    game.LabEntry.Y + game.LabAxis.Y * Labyrinth.Spacing * 0.5,
+                    game.LabEntry.Z + game.LabAxis.Z * Labyrinth.Spacing * 0.5);
+            }
+
+            //double half = game.ArenaSize / 1.7;
 
             // ── Фильтрация мира: один раз на тик, а не на каждого кандидата ──
             // Кристаллы: только ближайшие 3 к голове. 1000 → 3 записи,
@@ -95,7 +108,7 @@ namespace Snake3D
                     bool straight = iy == 2 && ip == 1;
                     double s = Evaluate(dir, head, bot.Step, GameConfig.Bot.LookaheadSteps,
                                          half, crashR, mineR, obstacles, nearMines,
-                                         nearCrystals, pickups, straight);
+                                         nearCrystals, pickups, straight, depotTarget);
                     if (s > bestScore) { bestScore = s; best = dir; }
                 }
             }
@@ -108,7 +121,7 @@ namespace Snake3D
         private double Evaluate(Vector3D dir, Point3D head, double stepLen, int lookahead,
             double half, double crashR, double mineR,
             List<Point3D> obstacles, IReadOnlyList<Point3D> mines,
-            IReadOnlyList<Point3D> crystals, IReadOnlyList<Point3D> pickups, bool isStraight)
+            IReadOnlyList<Point3D> crystals, IReadOnlyList<Point3D> pickups, bool isStraight, Point3D? depotTarget)
         {
             Point3D pos = head;
             int free = 0;
@@ -163,10 +176,22 @@ namespace Snake3D
             // у Point3D нет метода Length (он есть только у Vector3D)
             double centerDist = Math.Sqrt(pos.X * pos.X + pos.Y * pos.Y + pos.Z * pos.Z);
 
-            double score = free * 1000.0        // безопасность важнее всего — вес задавит еду
-                         - food * 40.0          // ближе к еде — лучше
-                         - pickupDist * 80.0    // пикап оружия вдвое «вкуснее» кристалла
-                         - centerDist * 10.0;   // мягкая тяга к центру: не липнем к стенам
+            double score = free * 1000.0;        // безопасность важнее всего — вес задавит еду
+            if (depotTarget.HasValue)
+            {
+                // Depot mode: тяга к коридору сильнее еды, слабее безопасности
+                double ddx = pos.X - depotTarget.Value.X;
+                double ddy = pos.Y - depotTarget.Value.Y;
+                double ddz = pos.Z - depotTarget.Value.Z;
+                score -= Math.Sqrt(ddx * ddx + ddy * ddy + ddz * ddz) * 150.0;
+                score -= food * 5.0;
+            }
+            else
+            {
+                score -= food * 40.0;       // ближе к еде — лучше
+                score -= pickupDist * 80.0; // пикап оружия вдвое «вкуснее» кристалла
+            }
+            score -= centerDist * 10.0;     // мягкая тяга к центру: не липнем к стенам           
 
             if (isStraight) score += 15.0;      // прямой курс предпочтительнее — меньше дёрганья
             score += _rand.NextDouble() * 8.0;  // капля хаоса: боты не ходят строем

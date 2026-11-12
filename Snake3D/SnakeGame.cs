@@ -22,6 +22,7 @@
 //моделей — дальше работают лишь дешёвые матрицы.
 
 using Snake3DViewer;
+using static Snake3D.GameConfig;
 
 namespace Snake3D
 {
@@ -217,6 +218,13 @@ namespace Snake3D
         public Point3D Head => _segments.Count > 0 ? _segments[0] : default;
         public Vector3D Forward => _forward;
 
+        //Лабиринт - перезарядка
+        private bool _labOpen;
+        private Point3D _labEntry;
+        private Vector3D _labAxis;
+        private double[] _refillCooldown = new double[64];  // [0] игрок, [1..] боты
+        private bool _crosshairUnlocked;                     // прицел появляется после первого refill
+
         // ── 3.6 Ориентация и повороты ──
         private Vector3D _forward;   // куда летим
         private Vector3D _up;        // где верх
@@ -320,6 +328,11 @@ namespace Snake3D
         
         public event Action<BotSnake, string>? BotDied;   // любая смерть бота (звук/эффекты)
         public event Action<BotSnake>? BotDestroyed;      // сбит снарядом игрока
+
+        //Лбиринт
+        public bool LabyrinthOpen => _labOpen;
+        public Point3D LabEntry => _labEntry;
+        public Vector3D LabAxis => _labAxis;
 
         // ── Здоровье игрока ──
         private int _health;
@@ -1193,7 +1206,7 @@ namespace Snake3D
         {
             if (_segments.Count == 0) return;
 
-            double alpha = (DateTime.UtcNow - _lastLogicTick).TotalSeconds / LogicInterval;
+            double alpha = (DateTime.UtcNow - _lastLogicTick).TotalSeconds / LogicInterval;           
             if (alpha < 0) alpha = 0;
             if (alpha > 1) alpha = 1;
 
@@ -1216,12 +1229,18 @@ namespace Snake3D
             double ulen = Math.Sqrt(ux * ux + uy * uy + uz * uz);
             if (ulen > 1e-9) { ux /= ulen; uy /= ulen; uz /= ulen; }
 
+            //_watch.Restart();
+            //if (!SuppressCamera)
+            //    _proxy.FollowHead(0);
+            //_watch.Stop();
+            //_tCamera += _watch.Elapsed.TotalMilliseconds;
+
             _watch.Restart();
             _proxy.SetOrientation(fx, fy, fz, ux, uy, uz);
             _proxy.UpdateCrystalOrientations();
             _watch.Stop();
             _tCrystals += _watch.Elapsed.TotalMilliseconds;
-                
+
             _watch.Restart();
             for (int i = 0; i < _nextPositions.Count; i++)
             {
@@ -1668,11 +1687,26 @@ namespace Snake3D
         //ОРУЖИЕ
         private void SpawnWeapon()
         {
-            if (_weaponOnField) return;   // второй пикап не нужен — активный ещё на поле
+            if (_labOpen || _weaponOnField) return;   // второй пикап не нужен — активный ещё на поле
 
-            Point3D p = FindFreeSpot();
-            _weaponPickups.Add(p);
-            _proxy.AddWeaponAt(p.X, p.Y, p.Z, GameConfig.Weapon.FallbackRadius);
+            if (Labyrinth.UseLabyrinth)
+            {
+                Point3D p = FindFreeSpot();
+                // курс коридора — к центру арены: гарантированно не в стену
+                Vector3D dir = new Vector3D(-p.X, -p.Y, -p.Z).Normalized();
+                _labEntry = p; _labAxis = dir;
+                _labOpen = true;
+                _proxy.OpenLabyrinth(p.X, p.Y, p.Z, dir.X, dir.Y, dir.Z);
+                _weaponLifeTimer = GameConfig.Weapon.LifeTime;   // врата живут столько же, сколько пикап
+                _crystalsSinceWeapon = 0;
+                WeaponSpawned?.Invoke();
+                return;
+            }
+
+            // ── Откат: прежняя сфера, без изменений ──
+            Point3D old = FindFreeSpot();
+            _weaponPickups.Add(old);
+            _proxy.AddWeaponAt(old.X, old.Y, old.Z, GameConfig.Weapon.FallbackRadius);
             _weaponOnField = true;
             _weaponLifeTimer = GameConfig.Weapon.LifeTime;   // 30 секунд на поднятие
             _crystalsSinceWeapon = 0;
@@ -1680,8 +1714,61 @@ namespace Snake3D
             System.Diagnostics.Trace.WriteLine("[Weapon] пикап заспавнен");
         }
 
+        private void ApplyRefill(int id)
+        {
+            if (id == 0)
+            {
+                _health = 5;
+                _ammo = Labyrinth.SpawnAmmo;
+                _crosshairUnlocked = true;                  // прицел открыт
+                _proxy.SetCrosshair(true, Head.X, Head.Y, Head.Z, Forward.X);
+            }
+            else
+            {
+                var bot = Bots[id - 1];
+                bot.Health = 3.0;
+                bot.Ammo = Labyrinth.SpawnAmmo;
+            }
+            _refillCooldown[id] = Labyrinth.PassCooldown;
+        }
+
         private void TickWeapon(double dt)
         {
+            // кулдауны тикают всегда
+            for (int i = 0; i < _refillCooldown.Length; i++)
+                if (_refillCooldown[i] > 0) _refillCooldown[i] -= dt;
+
+            if (_labOpen)
+            {
+                _weaponLifeTimer -= dt;
+                if (_weaponLifeTimer <= 0)
+                {
+                    _proxy.CloseLabyrinth();
+                    _labOpen = false;
+                    _crystalsSinceWeapon = 0;
+                    WeaponExpired?.Invoke();
+                }
+                else
+                {
+                    // игрок
+                    if (_refillCooldown[0] <= 0 &&
+                        _proxy.CheckLabyrinthPass(0, Head.X, Head.Y, Head.Z))
+                        ApplyRefill(0);
+
+                    // боты — тот же детектор
+                    for (int b = 0; b < Bots.Count; b++)
+                    {
+                        int id = b + 1;
+                        if (!Bots[b].IsAlive || _refillCooldown[id] > 0) continue;
+                        Point3D h = Bots[b].Segments[0];
+                        if (_proxy.CheckLabyrinthPass(id, h.X, h.Y, h.Z))
+                            ApplyRefill(id);
+                    }
+                }
+            }
+
+            if (Labyrinth.UseLabyrinth) return;   // старый пикап не тикаем
+
             if (_weaponOnField)
             {
                 _weaponLifeTimer -= dt;

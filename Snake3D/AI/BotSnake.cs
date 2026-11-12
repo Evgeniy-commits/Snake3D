@@ -36,6 +36,7 @@ namespace Snake3D
         // Оружие бота
         public int Ammo;
         public double FireCooldown;
+        public double Health;   // у бота 3 очка с рождения
 
         // Цвет корабля — случайный при создании, живёт до конца сессии
         public double[] ShipColor;

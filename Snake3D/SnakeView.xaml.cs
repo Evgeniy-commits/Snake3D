@@ -271,10 +271,10 @@ namespace Snake3D
 
                 // 6. Мышь — на WinForms-события контрола (airspace: WPF-события
                 //    над нативным HWND не срабатывают). Клавиатура — на WPF.
-                _viewport.MouseDown += Viewport_WinMouseDown;
-                _viewport.MouseMove += Viewport_WinMouseMove;
-                _viewport.MouseUp += Viewport_WinMouseUp;
-                _viewport.MouseWheel += Viewport_WinMouseWheel;
+                _viewport.MouseDown += Viewport_WinMouseDown!;
+                _viewport.MouseMove += Viewport_WinMouseMove!;
+                _viewport.MouseUp += Viewport_WinMouseUp!;
+                _viewport.MouseWheel += Viewport_WinMouseWheel!;
 
                 PreviewKeyDown += SnakeView_PreviewKeyDown;
                 PreviewKeyUp += SnakeView_PreviewKeyUp;
@@ -565,9 +565,9 @@ namespace Snake3D
             if (_hud == null) return;
 
             // Заряды: обновляем вместе с HUD-тиком (30 мс), без отдельного таймера
-            ProgressText.Text = _game.Mode == GameMode.Mission
+            ProgressText.Text = _game?.Mode == GameMode.Mission
                 ? $"Кристаллы: {_game.MissionLeft}/{_game.MissionTotal} · Заряды: {_game.Ammo}"
-                : $"Кристаллы: {_game.Crystals.Count} · Заряды: {_game.Ammo}";
+                : $"Кристаллы: {_game?.Crystals.Count} · Заряды: {_game?.Ammo}";
 
             bool cockpit = _viewport?.Proxy != null && _viewport.Proxy.IsCockpitView();
             _hud.ShowCrosshair(cockpit);
@@ -578,18 +578,18 @@ namespace Snake3D
                 return;
             }
 
-            var crystals = _game.Crystals;
+            var crystals = _game?.Crystals;
             var xs = new List<double?>();
             var ys = new List<double>();
 
             double w = ViewportHost.ActualWidth;
             double h = ViewportHost.ActualHeight;
 
-            foreach (var c in crystals)
+            foreach (var c in crystals!)
             {
                 int sx = 0, sy = 0;
                 bool inFront = false;
-                bool ok = _viewport.Proxy.ProjectToScreen(c.X, c.Y, c.Z, ref sx, ref sy, ref inFront);
+                bool ok = _viewport!.Proxy!.ProjectToScreen(c.X, c.Y, c.Z, ref sx, ref sy, ref inFront);
 
                 if (ok && inFront && sx >= 0 && sx <= w && sy >= 0 && sy <= h)
                 {
