@@ -86,7 +86,7 @@ namespace Snake3D
         private readonly double _step = GameConfig.StepLength;
         private readonly double _foodRadius;
         private readonly double _arenaSize;
-        private Random _rand = new Random();
+        private readonly Random _rand = new Random();
 
         // ── 3.2 Состояние партии ──
         public int Score { get; private set; }
@@ -114,8 +114,11 @@ namespace Snake3D
         public double LogicInterval =>
                _step / (GameConfig.BaseStepsPerSecond *
                             Math.Max(0.25, SpeedMultiplier * (_boostActive ? GameConfig.Boost.SpeedMultiplier : 1.0)));
-        
+
         // ── 3.3 Объекты арены: кристаллы и мины ──
+
+        private int _shieldCount, _boostCount, _labCount;
+
         //кристаллы
         private readonly List<Point3D> _crystals = new();
         public IReadOnlyList<Point3D> Crystals => _crystals;
@@ -135,6 +138,28 @@ namespace Snake3D
         private int _pendingMineSpawns;
         private const double MineSpawnBudgetMs = 1.0;   // мс на кадр, подбирается по трейсу
 
+        //Очередь для отъеденных сегментов
+        private struct PendingBite
+        {
+            public BotSnake Attacker;   // null — атакующий игрок
+            public BotSnake Victim;     // null — жертва игрок
+            public int HitIndex;
+        }
+        private readonly List<PendingBite> _pendingBites = new();
+
+        public void QueueBite(BotSnake attacker, BotSnake victim, int hitIndex)
+        {
+            if (attacker == null || !attacker.IsAlive) return;
+            if (victim == null || !victim.IsAlive) return;
+            _pendingBites.Add(new PendingBite { Attacker = attacker, Victim = victim, HitIndex = hitIndex });
+        }
+
+        public void QueueBiteOnPlayer(BotSnake attacker, int hitIndex)
+        {
+            if (attacker == null || !attacker.IsAlive || IsGameOver) return;
+            _pendingBites.Add(new PendingBite { Attacker = attacker, Victim = null, HitIndex = hitIndex });
+        }
+
         // ── 3.4 Супер-кристаллы ──
         // Супер-кристаллы: три штуки, всплывают после 10 съеденных обычных,
         // живут минуту, затем возвращаются в пул обычных
@@ -149,6 +174,7 @@ namespace Snake3D
         private bool _superActive;      // окно супер-кристаллов открыто
         private double _superTimer;     // сколько осталось до конца окна
         private int _eatenSinceSuper;   // счётчик съеденных обычных (идёт только при закрытом окне)
+        private int _crystalsSinceSuper = 0;   // кристаллы до следующего супер-спавна
 
         // ── 3.5 Щит ──
         // Щит
@@ -159,7 +185,6 @@ namespace Snake3D
         private double _shieldLifeTimer;    // сколько щиту осталось ждать на арене
         private bool _protectionActive;     // защита от мин активна
         private double _protectionTimer;    // сколько защиты осталось
-
         private readonly List<Point3D> _shields = new();
         public IReadOnlyList<Point3D> Shields => _shields;
         public bool ProtectionActive => _protectionActive;
@@ -220,10 +245,16 @@ namespace Snake3D
 
         //Лабиринт - перезарядка
         private bool _labOpen;
-        private Point3D _labEntry;
-        private Vector3D _labAxis;
-        private double[] _refillCooldown = new double[64];  // [0] игрок, [1..] боты
-        private bool _crosshairUnlocked;                     // прицел появляется после первого refill
+        private Point3D _labEntry;                                  // точка входа — пишет SpawnLabyrinth
+        private Vector3D _labAxis;                                  // направление коридора — пишет SpawnLabyrinth
+        private double[] _refillCooldown = new double[64];          // [0] игрок, [1..] боты
+        private bool _crosshairUnlocked;                            // прицел появляется после первого refill
+
+        public bool LabOpen => _labOpen;
+        public Point3D LabAxisStart => _labEntry;
+        public Vector3D LabAxisDir => _labAxis;
+
+        private double _superGuaranteeTimer = SuperItems.GuaranteeSeconds;
 
         // ── 3.6 Ориентация и повороты ──
         private Vector3D _forward;   // куда летим
@@ -299,6 +330,7 @@ namespace Snake3D
         public event Action? ShotFired;        // выстрел (звук, вспышка)
         public event Action? ShotBlocked;      // нажал выстрел при пустом магазине
         public event Action? MineDestroyed;    // мину сбили
+        public Action<Point3D>? FiredAtPlayer;   // бот выстрелил в игрока : позиция дула
 
         // ── 3.10 Замеры производительности ──
         //Для замера производительности
@@ -329,10 +361,18 @@ namespace Snake3D
         public event Action<BotSnake, string>? BotDied;   // любая смерть бота (звук/эффекты)
         public event Action<BotSnake>? BotDestroyed;      // сбит снарядом игрока
 
-        //Лбиринт
+        // Изоляция слоёв ботов для поиска пропадающих кусков корабля
+        private bool _botsSegmentsOn = true;   // слой 0: сегменты ботов
+        private bool _botsShipsOn = true;   // слой 1: корабли ботов
+        private bool _botsHalosOn = true;   // слой 2: ореолы ботов
+        private DateTime _lastNearLog = DateTime.MinValue;   // [Near]-лога
+
+        //Лабиринт
         public bool LabyrinthOpen => _labOpen;
         public Point3D LabEntry => _labEntry;
         public Vector3D LabAxis => _labAxis;
+        private List<Point3D> _labPtsC = new List<Point3D>();
+        public IReadOnlyList<Point3D> LabPath => _labPtsC;
 
         // ── Здоровье игрока ──
         private int _health;
@@ -849,33 +889,37 @@ namespace Snake3D
                     ScoreChanged?.Invoke(this, Score);
                     CrystalEaten?.Invoke();
 
-                    // Щит: во время активной защиты счёт заморожен —
-                    // отсчёт возобновится после её окончания («счёт по истечении»)
-                    if (!_protectionActive)
-                    {
-                        _crystalsSinceShield++;
-                        if (_crystalsSinceShield >= GameConfig.Shield.TriggerCount)
-                            SpawnShield();
-                    }
+                    //// Щит: во время активной защиты счёт заморожен —
+                    //// отсчёт возобновится после её окончания («счёт по истечении»)
+                    //if (!_protectionActive)
+                    //{
+                    //    _crystalsSinceShield++;
+                    //    if (_crystalsSinceShield >= GameConfig.Shield.TriggerCount)
+                    //        SpawnShield();
+                    //}
 
-                    //пока буст активен, отсчёт не идёт.
-                    if (!_boostActive)
-                    {
-                        _crystalsSinceBoost++;
-                        if (_crystalsSinceBoost >= GameConfig.Boost.TriggerCount)
-                            SpawnBoost();
-                    }
+                    ////пока буст активен, отсчёт не идёт.
+                    //if (!_boostActive)
+                    //{
+                    //    _crystalsSinceBoost++;
+                    //    if (_crystalsSinceBoost >= GameConfig.Boost.TriggerCount)
+                    //        SpawnBoost();
+                    //}
 
-                    _crystalsSinceWeapon++;
-                    System.Diagnostics.Trace.WriteLine($"weapon counter: {_crystalsSinceWeapon}");
-                    if (_crystalsSinceWeapon >= GameConfig.Weapon.TriggerCount)
-                        SpawnWeapon();
+                    //_crystalsSinceWeapon++;
+                    //System.Diagnostics.Trace.WriteLine($"weapon counter: {_crystalsSinceWeapon}");
+                    //if (_crystalsSinceWeapon >= GameConfig.Weapon.TriggerCount)
+                    //    SpawnWeapon();
 
                     if (_mode == GameMode.Mission && _crystals.Count == 0 && _superCrystals.Count == 0)
                     {
                         TriggerVictory();
                         return true;
                     }
+
+                    // Единый счётчик суперов: щит / буст / лабиринт решает TrySpawnSuper
+                    _crystalsSinceWeapon++;
+                    TrySpawnSuper();
                     break;
                 }
             }
@@ -901,25 +945,27 @@ namespace Snake3D
                         return true;
                     }
 
-                    // Щит: супер считается наравне с обычным — тот же freeze во время защиты
-                    if (!_protectionActive)
-                    {
-                        _crystalsSinceShield++;
-                        if (_crystalsSinceShield >= GameConfig.Shield.TriggerCount)
-                            SpawnShield();
-                    }
+                    //// Щит: супер считается наравне с обычным — тот же freeze во время защиты
+                    //if (!_protectionActive)
+                    //{
+                    //    _crystalsSinceShield++;
+                    //    if (_crystalsSinceShield >= GameConfig.Shield.TriggerCount)
+                    //        SpawnShield();
+                    //}
 
-                    if (!_boostActive)
-                    {
-                        _crystalsSinceBoost++;
-                        if (_crystalsSinceBoost >= GameConfig.Boost.TriggerCount)
-                            SpawnBoost();
-                    }
+                    //if (!_boostActive)
+                    //{
+                    //    _crystalsSinceBoost++;
+                    //    if (_crystalsSinceBoost >= GameConfig.Boost.TriggerCount)
+                    //        SpawnBoost();
+                    //}
+
+                    //_crystalsSinceWeapon++;
+                    //if (_crystalsSinceWeapon >= GameConfig.Weapon.TriggerCount)
+                    //    SpawnWeapon();
 
                     _crystalsSinceWeapon++;
-                    if (_crystalsSinceWeapon >= GameConfig.Weapon.TriggerCount)
-                        SpawnWeapon();
-
+                    TrySpawnSuper();
                     break;
                 }
             }
@@ -931,10 +977,11 @@ namespace Snake3D
                     _proxy.RemoveShield();
                     _shields.RemoveAt(i);
                     _shieldOnField = false;
+                    _shieldCount--;
+                    KickSuperGuarantee();
 
                     _protectionActive = true;
                     _protectionTimer = GameConfig.Shield.ProtectionTime;
-                    _crystalsSinceShield = 0;   // следующий отсчёт начнётся по истечении защиты
                     _proxy.SetShipShield(true, GameConfig.Shield.ShipHaloRadius);
 
                     ShieldTaken?.Invoke();
@@ -949,10 +996,11 @@ namespace Snake3D
                     _proxy.RemoveBoost();
                     _boosts.RemoveAt(i);
                     _boostOnField = false;
+                    _boostCount--;
+                    KickSuperGuarantee();
 
                     _boostActive = true;
                     _boostTimer = GameConfig.Boost.BoostTime;
-                    _crystalsSinceBoost = 0;   // следующий отсчёт — после окончания ускорения
                     _proxy.SetShipBoost(true, GameConfig.Boost.ShipHaloRadius);
 
                     BoostTaken?.Invoke();
@@ -969,7 +1017,6 @@ namespace Snake3D
                     _weaponOnField = false;
 
                     _ammo += GameConfig.Weapon.ShotsPerPickup;   // копим: поверх остатка
-                    _crystalsSinceWeapon = 0;   // счёт к следующему пикапу — после его судьбы
                     WeaponTaken?.Invoke();
                     break;
                 }
@@ -1029,18 +1076,138 @@ namespace Snake3D
                 foreach (var bot in _bots)
                 {
                     if (!bot.IsAlive) continue;
-                    for (int i = 0; i < bot.Segments.Count; i++)
+
+                    // Корпус бота крупнее сегментной сферы: головной слот — это
+                    // корабль, его габарит не покрывается crashRadius. Без этой
+                    // проверки игрок пролетает сквозь ботский корпус и его части
+                    // перекрывают бота (или наоборот) — «пропадающие куски»
+                    if (Distance(newHead, bot.Segments[0]) < _segmentRadius + GameConfig.HullRadius)
                     {
-                        if (Distance(newHead, bot.Segments[i]) < crashRadius)
-                        {
-                            TriggerGameOver();
-                            return true;
-                        }
+                        // Столкновение с ботским кораблём = столкновение с защищённой
+                        // зоной: прежнее поведение — смерть игрока
+                        TriggerGameOver();
+                        return true;
                     }
+
+                    int hit = FindContactIndex(bot.Segments, newHead, crashRadius);
+                    if (hit < 0) continue;
+
+                    System.Diagnostics.Trace.WriteLine(
+                        $"[BiteCheck] бот={bot.Id} hit={hit} segs={bot.Segments.Count} " +
+                        $"shield={bot.ShieldActive} boost={bot.BoostActive}");
+
+                    if (IsBiteIndex(bot.Segments.Count, hit))
+                    {
+                        // Укус бота: обрабатываем позже, через очередь
+                        _pendingBites.Add(new PendingBite { Attacker = null, Victim = bot, HitIndex = hit });
+                    }
+                    else if (hit < GameConfig.Bot.ProtectedSegments ||
+                             bot.Segments.Count > GameConfig.Bot.MinKeepSegments)
+                    {
+                        // Защищённая зона или середина тела — прежняя смерть
+                        TriggerGameOver();
+                        return true;
+                    }
+                    break;
                 }
             }
 
             return false;
+        }
+
+        // Отложенные укусы: жертва за кадр могла умереть или укоротиться —
+        // всё перепроверяем перед отрезанием
+        private void ProcessDeferredBites()
+        {
+            if (_pendingBites.Count == 0) return;
+
+            foreach (var b in _pendingBites)
+            {
+                if (IsGameOver) continue;
+                if (b.Attacker != null && !b.Attacker.IsAlive) continue;
+                if (b.Victim != null && !b.Victim.IsAlive) continue;
+
+                int count = b.Victim == null ? _segments.Count : b.Victim.Segments.Count;
+                int hit = b.HitIndex;
+                if (hit >= count) continue;
+                if (!IsBiteIndex(count, hit)) continue;
+
+                int cut = count - hit;    // откусываем от hit до самого кончика
+
+                // Правила укуса: за один раз можно откусить не больше BiteZoneLength;
+                // после укуса жертва должна остаться не короче MinKeepSegments.
+                // Нарушил — умирает АТАКУЮЩИЙ (жадный укус наказывает кусающего),
+                // жертва не тронута
+                if (cut > GameConfig.Bot.BiteZoneLength ||
+                    count - cut < GameConfig.Bot.MinKeepSegments)
+                {
+                    if (b.Attacker == null)
+                    {
+                        // Атакующий — игрок
+                        TriggerGameOver();
+                        return;   // игра кончена — очередь больше не разбираем
+                    }
+                    else
+                    {
+                        // Атакующий — бот: умирает тем же путём, что от снаряда
+                        // (имя метода смерти бота подставь своё — как у снарядного попадания)
+                        KillBot(b.Attacker, "жадный укус");
+                    }
+                    continue;
+                }
+
+                int points = cut * GameConfig.Bot.BiteScorePerSegment;
+
+                // 1. Позиции откусываемых сегментов
+                var taken = new List<Point3D>(cut);
+                for (int k = 0; k < cut; k++)
+                    taken.Add(b.Victim == null ? _segments[hit + k] : b.Victim.Segments[hit + k]);
+
+                // 2. Отрезать у жертвы
+                if (b.Victim == null)
+                {
+                    CutPlayerTail(hit);
+                    Score -= points;
+                }
+                else
+                {
+                    b.Victim.CutTail(hit);          // метод из прошлого ответа
+                    b.Victim.Score -= points;
+                }
+
+                // 3. Прицепить к хвосту атакующего
+                if (b.Attacker == null)
+                {
+                    // Хвост игрока удлиняется на месте: дубль последнего сегмента
+                    for (int k = 0; k < cut; k++)
+                    {
+                        Point3D tail = _segments[_segments.Count - 1];
+                        _segments.Add(tail);
+                        _proxy.AddSegment(tail.X, tail.Y, tail.Z, _segmentRadius, _segments.Count - 1);
+                    }
+                    Score += points;
+                }
+                else
+                {
+                    // Хвост атакующего удлиняется на месте: дублируем последний
+                    // сегмент, позиции жертвы не перетаскиваем — иначе хвост
+                    // атакующего визуально растянется до места гибели жертвы
+                    for (int k = 0; k < cut; k++)
+                    {
+                        Point3D tail = b.Attacker.Segments[b.Attacker.Segments.Count - 1];
+                        b.Attacker.Segments.Add(tail);
+                        _proxy.AddSegment(tail.X, tail.Y, tail.Z, b.Attacker.SegmentRadius,
+                                          b.Attacker.GlobalId(b.Attacker.Segments.Count - 1));
+                    }
+                    // новые сегменты должны быть цвета атакующего
+                    _proxy.SetBotColor(b.Attacker.Id,
+                        b.Attacker.TailColor[0], b.Attacker.TailColor[1], b.Attacker.TailColor[2]);
+                    b.Attacker.Score += points;
+                }
+                if (b.Victim == null || b.Attacker == null)
+                    ScoreChanged?.Invoke(this, Score);
+            }
+            _pendingBites.Clear();
         }
 
         public void Update()
@@ -1126,14 +1293,47 @@ namespace Snake3D
                     _phTicks++;
                 }
 
+                // Диагностика пропадающих кусков: сегмент или корабль бота
+                // рядом с кабиной? bot.Next обновлён последним тиком — свежие.
+                // Тротлинг: не чаще раза в секунду, чтобы не заливать лог
+                if ((DateTime.UtcNow - _lastNearLog).TotalSeconds > 1.0)
+                {
+                    double minD = double.MaxValue;
+                    int nearBot = -1, nearId = -1;
+                    foreach (var bot in _bots)
+                    {
+                        if (!bot.IsAlive) continue;
+                        for (int i = 2; i < bot.Next.Count; i++)   // голова скрыта — от 2-го
+                        {
+                            double d = Distance(bot.Next[i], _segments[0]);
+                            if (d < minD) { minD = d; nearBot = bot.Id; nearId = i; }
+                        }
+                        // Корабль бота (он же голова) — отдельным замером
+                        double dShip = Distance(bot.Segments[0], _segments[0]);
+                        if (dShip < minD) { minD = dShip; nearBot = bot.Id; nearId = -1; }
+                    }
+
+                    if (minD < 30.0)
+                    {
+                        _lastNearLog = DateTime.UtcNow;
+                        if (nearId < 0)
+                            System.Diagnostics.Trace.WriteLine(
+                                $"[Near] бот {nearBot} КОРАБЛЬ в {minD:F1} от кабины");
+                        else
+                            System.Diagnostics.Trace.WriteLine(
+                                $"[Near] бот {nearBot} сегмент {nearId} в {minD:F1} от кабины");
+                    }
+                }
+
                 TickSuperCrystals(dt);   // минута супер-кристаллов: тикает пока игра активна
                 TickShield(dt);
                 TickHealth(dt);
                 TickBoost(dt);
                 TickWeapon(dt);
+                TickSuperGuarantee(dt);
                 _ph.Restart(); TickProjectiles(dt); _ph.Stop(); _msProj += _ph.Elapsed.TotalMilliseconds;
                 _ph.Restart(); ProcessDeferredMineSpawns(); _ph.Stop(); _msSpawn += _ph.Elapsed.TotalMilliseconds;
-                
+                _ph.Restart(); ProcessDeferredBites(); _ph.Stop();
 
                 _pulsePhase += dt * (2.0 * Math.PI / 0.4);
                 _elapsed += dt;
@@ -1262,8 +1462,7 @@ namespace Snake3D
                     _tHead += _watch.Elapsed.TotalMilliseconds;
                 }
                 else
-                {
-                    if (_shipLoaded && i == 1) continue;
+                {                    
                     _proxy.MoveSegment(i, x, y, z);
                 }
             }
@@ -1413,6 +1612,20 @@ namespace Snake3D
         //Случайная точка с проверкой: не на змейке, не на кристалле,
         //не на мине.До 200 попыток; если не нашли — ставим куда угодно
         //(иначе игра зависнет, если арена забита объектами).
+        private Point3D FindCenterSpot()
+        {
+            double r = ArenaSize * 0.3;   // радиус центральной зоны — крути по вкусу
+            for (int attempt = 0; attempt < 25; attempt++)
+            {
+                var p = new Point3D(
+                    (_rand.NextDouble() * 2 - 1) * r,
+                    (_rand.NextDouble() * 2 - 1) * r,
+                    (_rand.NextDouble() * 2 - 1) * r);
+                if (IsFree(p, full: true)) return p;   // та же проверка, что внутри FindFreeSpot
+            }
+            return FindFreeSpot();   // не нашли за 40 попыток — как обычно
+        }
+
         private Point3D FindFreeSpot()
         {
             const double margin = 1.5;
@@ -1544,6 +1757,50 @@ namespace Snake3D
             _msSpawnCount += spawned;
         }
 
+        private void TrySpawnSuper()
+        {
+            if (_crystalsSinceWeapon < GameConfig.Weapon.TriggerCount) return;
+            if (!PickAndSpawnSuper()) return;   // слоты заняты — счётчик копим дальше
+            _crystalsSinceWeapon = 0;
+        }
+
+        // Выбор типа и спавн. true — что-то заспавнено.
+        private bool PickAndSpawnSuper()
+        {
+            var options = new List<int>();
+            if (_shieldCount < SuperItems.MaxShields && !_shieldOnField && !_protectionActive) options.Add(0);
+            if (_boostCount < SuperItems.MaxBoosts && !_boostOnField && !_boostActive) options.Add(1);
+            if (_labCount < SuperItems.MaxLabyrinths && !_labOpen) options.Add(2);
+            if (options.Count == 0) return false;
+
+            int pick = options[_rand.Next(options.Count)];
+            if (pick == 0) SpawnShield();
+            else if (pick == 1) SpawnBoost();
+            else SpawnLabyrinth();
+            return true;
+        }
+
+        // Гарантированный супер вне счётчика кристаллов: лабиринт приходит
+        // по ритму, а не по везению. Лимит «не больше 2 на поле» соблюдаем
+        private void TickSuperGuarantee(double dt)
+        {
+            if (IsGameOver || !IsRunning) return;
+            _superGuaranteeTimer -= dt;
+            if (_superGuaranteeTimer > 0) return;
+            _superGuaranteeTimer = SuperItems.GuaranteeSeconds;
+
+            int onField = (_shieldOnField ? 1 : 0) + (_boostOnField ? 1 : 0) + (_labOpen ? 1 : 0);
+            if (onField >= 2) return;   // и так норма — пересидим цикл
+            PickAndSpawnSuper();
+        }
+
+        // Ускорить появление второго супера: как только один предмет ушёл
+        // с поля, следующий ждать не 40 сек, а до 8
+        private void KickSuperGuarantee()
+        {
+            _superGuaranteeTimer = Math.Min(_superGuaranteeTimer, 8.0);
+        }
+
         // Спавн супер-кристаллов: три обычных случайных заменяются крупными фиолетовыми.
         // Сумма кристаллов на поле не меняется — счёт не дёргается.
         private void TrySpawnSuperCrystals()
@@ -1578,6 +1835,10 @@ namespace Snake3D
 
         private void SpawnShield()
         {
+            // Кап: больше двух щитов одновременно нельзя — ждём освобождения слота.
+            // Счётчик кристаллов НЕ сбрасываем: спавн случится, как только место освободится
+            if (_shieldCount >= SuperItems.MaxShields) return;
+
             if (_shieldOnField || _protectionActive) return;   // второй щит не нужен
 
             Point3D p = FindFreeSpot();
@@ -1586,11 +1847,14 @@ namespace Snake3D
             _shieldOnField = true;
             _shieldLifeTimer = GameConfig.Shield.LifeTime;
             _crystalsSinceShield = 0;   // счёт к следующему щиту — после его судьбы
+            _shieldCount++;
             ShieldSpawned?.Invoke();
         }
-
+        
         private void SpawnBoost()
         {
+            if (_boostCount >= SuperItems.MaxBoosts) return;
+
             if (_boostOnField || _boostActive) return;   // второй буст не нужен
 
             Point3D p = FindFreeSpot();
@@ -1599,7 +1863,35 @@ namespace Snake3D
             _boostOnField = true;
             _boostLifeTimer = GameConfig.Boost.LifeTime;
             _crystalsSinceBoost = 0;
+            _boostCount++;
             BoostSpawned?.Invoke();
+        }
+
+        private void SpawnLabyrinth()
+        {
+            if (_labOpen || _labCount >= SuperItems.MaxLabyrinths) return;
+
+            Point3D p = FindCenterSpot();
+            var pts = new List<Point3D>();
+            var dirs = new List<Vector3D>();
+            BuildLabPath(p, pts, dirs);        // ← гладкий путь из исправленного BuildLabPath
+            _labPtsC = pts;                    // маршруты ботов в депо — по точкам пути
+
+            _labEntry = p; _labAxis = dirs[0].Normalized();
+            _labOpen = true;
+            _labCount++;
+
+            // Кольца — по точкам и касательным пути: каждый тор получает своё
+            // направление, коридор повторяет плавный изгиб. Гладкость обеспечена
+            // самим BuildLabPath: доворот на каждое кольцо вместо ступеньки
+            _proxy.BeginLabyrinth(Labyrinth.RingCount);
+            for (int i = 0; i < pts.Count; i++)
+                _proxy.AddLabRing(i, pts[i].X, pts[i].Y, pts[i].Z,
+                    dirs[i].X, dirs[i].Y, dirs[i].Z);
+            _proxy.FinishLabyrinth();
+
+            _weaponLifeTimer = GameConfig.Weapon.LifeTime;
+            WeaponSpawned?.Invoke();
         }
 
         // Таймер окна: выжившие супер-кристаллы возвращаются в пул обычных.
@@ -1631,7 +1923,9 @@ namespace Snake3D
                     _proxy.RemoveShield();
                     _shields.Clear();
                     _shieldOnField = false;
+                    _shieldCount--;
                     _crystalsSinceShield = 0;   // не взяли — отсчёт заново
+                    KickSuperGuarantee();
                     ShieldExpired?.Invoke();
                 }
             }
@@ -1659,7 +1953,9 @@ namespace Snake3D
                     _proxy.RemoveBoost();
                     _boosts.Clear();
                     _boostOnField = false;
+                    _boostCount--;
                     _crystalsSinceBoost = 0;   // не взяли — отсчёт заново
+                    KickSuperGuarantee();
                     BoostExpired?.Invoke();
                 }
             }
@@ -1687,21 +1983,7 @@ namespace Snake3D
         //ОРУЖИЕ
         private void SpawnWeapon()
         {
-            if (_labOpen || _weaponOnField) return;   // второй пикап не нужен — активный ещё на поле
-
-            if (Labyrinth.UseLabyrinth)
-            {
-                Point3D p = FindFreeSpot();
-                // курс коридора — к центру арены: гарантированно не в стену
-                Vector3D dir = new Vector3D(-p.X, -p.Y, -p.Z).Normalized();
-                _labEntry = p; _labAxis = dir;
-                _labOpen = true;
-                _proxy.OpenLabyrinth(p.X, p.Y, p.Z, dir.X, dir.Y, dir.Z);
-                _weaponLifeTimer = GameConfig.Weapon.LifeTime;   // врата живут столько же, сколько пикап
-                _crystalsSinceWeapon = 0;
-                WeaponSpawned?.Invoke();
-                return;
-            }
+            if (_weaponOnField) return;   // второй пикап не нужен — активный ещё на поле
 
             // ── Откат: прежняя сфера, без изменений ──
             Point3D old = FindFreeSpot();
@@ -1718,22 +2000,31 @@ namespace Snake3D
         {
             if (id == 0)
             {
-                _health = 5;
-                _ammo = Labyrinth.SpawnAmmo;
+                double oldHp = _health;
+                _health = GameConfig.Health.MaxHits;        // полный заряд — из конфига, не магическим числом
+                _ammo = GameConfig.Labyrinth.SpawnAmmo;
                 _crosshairUnlocked = true;                  // прицел открыт
-                _proxy.SetCrosshair(true, Head.X, Head.Y, Head.Z, Forward.X);
+                _proxy.SetCrosshair(true, Head.X, Head.Y, Head.Z, GameConfig.Weapon.FallbackRadius);
+                HealthChanged?.Invoke(_health);             
+                System.Diagnostics.Trace.WriteLine(
+                    $"[Refill] игрок hp={oldHp:F0}->{_health} ammo={_ammo}");
             }
             else
             {
                 var bot = Bots[id - 1];
-                bot.Health = 3.0;
-                bot.Ammo = Labyrinth.SpawnAmmo;
+                bot.Health = Math.Min(GameConfig.Bot.MaxHealth, bot.Health + 1);
+                bot.Ammo = GameConfig.Labyrinth.SpawnAmmo;
+                System.Diagnostics.Trace.WriteLine($"[Refill] бот {bot.Id} ammo={bot.Ammo}");
             }
-            _refillCooldown[id] = Labyrinth.PassCooldown;
+            _refillCooldown[id] = GameConfig.Labyrinth.PassCooldown;
         }
 
         private void TickWeapon(double dt)
         {
+            // Кулдауны тикают всегда, при любом режиме — иначе стрельба блокируется
+            if (_fireCooldown > 0)
+                _fireCooldown -= dt;
+
             // кулдауны тикают всегда
             for (int i = 0; i < _refillCooldown.Length; i++)
                 if (_refillCooldown[i] > 0) _refillCooldown[i] -= dt;
@@ -1745,6 +2036,7 @@ namespace Snake3D
                 {
                     _proxy.CloseLabyrinth();
                     _labOpen = false;
+                    _labCount--;              
                     _crystalsSinceWeapon = 0;
                     WeaponExpired?.Invoke();
                 }
@@ -1762,7 +2054,11 @@ namespace Snake3D
                         if (!Bots[b].IsAlive || _refillCooldown[id] > 0) continue;
                         Point3D h = Bots[b].Segments[0];
                         if (_proxy.CheckLabyrinthPass(id, h.X, h.Y, h.Z))
+                        {
                             ApplyRefill(id);
+                            System.Diagnostics.Trace.WriteLine(
+                            $"[Refill] бот {b} ammo={Bots[b].Ammo} cd={_refillCooldown[id]:F1}");
+                        }
                     }
                 }
             }
@@ -1777,13 +2073,57 @@ namespace Snake3D
                     _proxy.RemoveWeapon();
                     _weaponPickups.Clear();
                     _weaponOnField = false;
-                    _crystalsSinceWeapon = 0;   // не подняли — кристаллы считаем заново
+                   
                     WeaponExpired?.Invoke();
                 }
             }
+           
+        }
 
-            if (_fireCooldown > 0)
-                _fireCooldown -= dt;
+        private void BuildLabPath(Point3D entry, List<Point3D> pts, List<Vector3D> dirs)
+        {
+            Vector3D dir = new Vector3D(-entry.X, -entry.Y, -entry.Z).Normalized();
+            Point3D pos = entry;
+            double half = ArenaSize / 2.0;
+            // Половинный угол на КАЖДОЕ кольцо вместо полного раз в два:
+            // суммарная кривизна та же, но траектория гладкая и торы стыкуются
+            double maxBend = Labyrinth.BendRad * 0.5;
+
+            for (int i = 0; i < Labyrinth.RingCount; i++)
+            {
+                pts.Add(pos);
+                dirs.Add(dir);
+
+                // Гладкий изгиб: каждый шаг — небольшой доворот. Рыскание и
+                // тангаж независимы, каждая ось с шансом ~1/3 не меняется
+                if (i > 0)
+                {
+                    double yaw = _rand.Next(3) == 0 ? 0 : (_rand.NextDouble() * 2 - 1) * maxBend;
+                    double pitch = _rand.Next(3) == 0 ? 0 : (_rand.NextDouble() * 2 - 1) * maxBend;
+
+                    Vector3D helper = Math.Abs(dir.Y) < 0.9 ? new Vector3D(0, 1, 0) : new Vector3D(1, 0, 0);
+                    Vector3D up = (helper - dir * Vector3D.DotProduct(dir, helper)).Normalized();
+                    Vector3D right = Vector3D.CrossProduct(dir, up).Normalized();
+
+                    dir = RotateVector(dir, up, yaw);
+                    dir = RotateVector(dir, right, pitch).Normalized();
+                }
+
+                Point3D next = pos + dir * Labyrinth.Spacing;
+
+                // Границы: не ступенька «развернуться к центру», а мягкий
+                // доворот курса — шпилька из колец исключена
+                if (Math.Abs(next.X) > half * 0.8 ||
+                    Math.Abs(next.Y) > half * 0.8 ||
+                    Math.Abs(next.Z) > half * 0.8)
+                {
+                    Vector3D toCenter = new Vector3D(-pos.X, -pos.Y, -pos.Z).Normalized();
+                    dir = (dir + toCenter * 0.7).Normalized();   // смесь курса и курса на центр
+                    next = pos + dir * Labyrinth.Spacing;
+                }
+
+                pos = next;
+            }
         }
 
         // Боты
@@ -1875,7 +2215,74 @@ namespace Snake3D
             if (index < 0 || index >= _crystals.Count) return;
             _proxy.RemoveCrystalAt(index);
             _crystals.RemoveAt(index);
-            EnsureCrystals();   // охота: поле пополняется — бот «выигрывает» место у игрока
+            EnsureCrystals();
+
+            // Супер-кристаллы: боты тоже кормят минуту гигантов
+            if (!_superActive)
+            {
+                _eatenSinceSuper++;
+                if (_eatenSinceSuper >= SuperTriggerCount)
+                    TrySpawnSuperCrystals();
+            }
+
+            // Единый счётчик суперов — общий со счётчиком игрока
+            _crystalsSinceWeapon++;
+            TrySpawnSuper();
+        }
+
+        public void OnBotAteSuperCrystal(int index, BotSnake bot)
+        {
+            if (index < 0 || index >= _superCrystals.Count) return;
+            _proxy.RemoveSuperCrystalAt(index);
+            _superCrystals.RemoveAt(index);
+            bot.Score += 50;    
+            if (_mode == GameMode.FreeHunt)
+                EnsureCrystals();
+        }
+
+        public void OnBotTookShield(BotSnake bot, int index)
+        {
+            if (index < 0 || index >= _shields.Count) return;
+            _proxy.RemoveShield();
+            _shields.RemoveAt(index);
+            _shieldOnField = false;
+            _shieldCount--;
+            KickSuperGuarantee();
+
+            bot.ShieldActive = true;
+            _proxy.SetBotShipShield(bot.Id, true, GameConfig.Shield.ShipHaloRadius);
+            bot.ShieldTimer = GameConfig.Shield.ProtectionTime;
+            ShieldTaken?.Invoke();
+        }
+
+        public void OnBotTookBoost(BotSnake bot, int index)
+        {
+            if (index < 0 || index >= _boosts.Count) return;
+            _proxy.RemoveBoost();
+            _boosts.RemoveAt(index);
+            _boostOnField = false;
+            _boostCount--;
+            KickSuperGuarantee();
+
+            bot.BoostActive = true;
+            _proxy.SetBotShipBoost(bot.Id, true, GameConfig.Boost.ShipHaloRadius);
+            bot.BoostTimer = GameConfig.Boost.BoostTime;
+            BoostTaken?.Invoke();
+        }
+
+        // Мина под ботом: щит гасит, иначе — смерть через единый путь
+        public void OnBotHitMine(BotSnake bot, int index)
+        {
+            if (index < 0 || index >= _mines.Count) return;
+
+            if (bot.ShieldActive)
+            {
+                _proxy.RemoveMineAt(index);
+                _mines.RemoveAt(index);
+                EnsureMines();
+                return;
+            }
+            KillBot(bot, "мина");
         }
 
         // ═══════════════════════════════════════════════════════════════════
@@ -1929,17 +2336,22 @@ namespace Snake3D
         // фактическому положению, тот же допуск «почти коснулся», что у головы.
         private void TickProjectiles(double dt)
         {
+            if (_hitInvuln > 0) _hitInvuln -= dt;
+
             if (_projectiles.Count == 0) return;
 
             double speed = GameConfig.Weapon.ProjectileSpeed;
             double half = _arenaSize / 2.0;
-
+           
             for (int i = _projectiles.Count - 1; i >= 0; i--)
             {
                 Projectile pr = _projectiles[i];
                 pr.Pos += pr.Dir * (speed * dt);
                 pr.Life -= dt;
 
+                // Стена и конец жизни: снаряд умирает и ОБЯЗАН быть удалён.
+                // Раньше удаление сидело внутри if (!dead) — снаряды на стене
+                // замирали навсегда и копились в списке
                 bool dead = pr.Life <= 0 ||
                             Math.Abs(pr.Pos.X) > half ||
                             Math.Abs(pr.Pos.Y) > half ||
@@ -1971,15 +2383,26 @@ namespace Snake3D
                         foreach (var bot in _bots)
                         {
                             if (!bot.IsAlive) continue;
-                            if (HitBotSegment(bot, pr.Pos) >= 0)
+                            if (HitBotSegment(bot, pr.Pos) < 0) continue;
+
+                            if (bot.ShieldActive)
+                            {
+                                // Щит бота поглотил снаряд — урона нет
+                                dead = true;
+                                break;
+                            }
+
+                            // Урон, а не мгновенная смерть: три попадания
+                            bot.Health -= 1;
+                            if (bot.Health <= 0)
                             {
                                 KillBot(bot, "сбит снарядом");
                                 Score += GameConfig.Bot.KillScore;
                                 ScoreChanged?.Invoke(this, Score);
                                 BotDestroyed?.Invoke(bot);
-                                dead = true;
-                                break;
                             }
+                            dead = true;
+                            break;
                         }
                     }
                     else
@@ -1987,6 +2410,7 @@ namespace Snake3D
                         // Снаряд бота: игрок
                         if (HitPlayerSegment(pr.Pos) >= 0)
                         {
+                            System.Diagnostics.Trace.WriteLine("[Proj] снаряд бота достиг игрока");
                             if (_protectionActive)
                             {
                                 // Щит поглотил: снаряд тратится впустую, урона нет
@@ -2006,7 +2430,7 @@ namespace Snake3D
 
                                 if (_health <= 0)
                                 {
-                                    TriggerGameOver();
+                                    TriggerGameOver("снаряд: hp=0");
                                 }
                             }
                             dead = true;   // снаряд в любом случае потрачен
@@ -2018,26 +2442,34 @@ namespace Snake3D
                             foreach (var bot in _bots)
                             {
                                 if (!bot.IsAlive || bot.Id == pr.Owner) continue;
-                                if (HitBotSegment(bot, pr.Pos) >= 0)
+                                if (HitBotSegment(bot, pr.Pos) < 0) continue;
+
+                                if (bot.ShieldActive)
                                 {
-                                    KillBot(bot, "сбит снарядом бота");
                                     dead = true;
                                     break;
                                 }
+
+                                bot.Health -= 1;
+                                if (bot.Health <= 0)
+                                    KillBot(bot, "сбит снарядом бота");
+                                dead = true;
+                                break;
                             }
                         }
                     }
-
-                    if (dead)
-                    {
-                        _proxy.RemoveProjectileAt(i);
-                        _projectiles.RemoveAt(i);
-                    }
-                    else
-                    {
-                        _proxy.MoveProjectile(i, pr.Pos.X, pr.Pos.Y, pr.Pos.Z);
-                    }
                 }
+
+                if (dead)
+                {
+                    _proxy.RemoveProjectileAt(i);
+                    _projectiles.RemoveAt(i);
+                }
+                else
+                {
+                    _proxy.MoveProjectile(i, pr.Pos.X, pr.Pos.Y, pr.Pos.Z);
+                }
+                
             }
         }
 
@@ -2091,11 +2523,11 @@ namespace Snake3D
             WeaponTaken?.Invoke();   // звук подбора — общий
         }
 
-        // Уязвимая зона: первые N сегментов. Хвост — броня.
+        // Попадание по боту: индекс по всему телу. Зона решает,
+        // что с ним делать — protected damage или bite
         private int HitBotSegment(BotSnake bot, Point3D p)
         {
-            int n = Math.Min(GameConfig.Bot.VulnerableSegments, bot.Segments.Count);
-            for (int i = 0; i < n; i++)
+            for (int i = 0; i < bot.Segments.Count; i++)
                 if (Distance(p, bot.Segments[i]) <=
                     GameConfig.Weapon.ProjectileRadius + _segmentRadius + 0.8)
                     return i;
@@ -2104,13 +2536,12 @@ namespace Snake3D
 
         private int HitPlayerSegment(Point3D p)
         {
-            int n = Math.Min(GameConfig.Bot.VulnerableSegments, _segments.Count);
-            for (int i = 0; i < n; i++)
+            for (int i = 0; i < _segments.Count; i++)
                 if (Distance(p, _segments[i]) <=
                     GameConfig.Weapon.ProjectileRadius + _segmentRadius + 0.8)
                     return i;
             return -1;
-        }        
+        }
 
         // ═══════════════════════════════════════════════════════════════════
         // БЛОК 11. ФИНАЛ ПАРТИИ И УТИЛИТЫ
@@ -2121,12 +2552,15 @@ namespace Snake3D
             Victory?.Invoke(this, EventArgs.Empty);
         }
 
-        private void TriggerGameOver()
+        private void TriggerGameOver(string reason = "?")
         {
+            System.Diagnostics.Trace.WriteLine(
+            $"[GameOver] причина: {reason} hp={_health} score={Score}");
             IsGameOver = true;
             IsRunning = false;
             _pendingMineSpawns = 0;
             GameOver?.Invoke(this, EventArgs.Empty);
+            System.Diagnostics.Trace.WriteLine(new System.Diagnostics.StackTrace(true).ToString());
         }
 
         public double Distance(Point3D a, Point3D b)
@@ -2196,11 +2630,131 @@ namespace Snake3D
 
             return parallel + rotatedPerp;
         }
+
+        // ═══════════════════════════════════════════════════════════════════
+        // БЛОК 13. Хелперы по хвосту
+        // ═══════════════════════════════════════════════════════════════════
+        // Индекс первого сегмента тела в радиусе касания (или -1)
+        public int FindContactIndex(IReadOnlyList<Point3D> body, Point3D p, double r)
+        {
+            for (int i = 0; i < body.Count; i++)
+                if (Distance(p, body[i]) < r) return i;
+            return -1;
+        }
+
+        // Укус возможен только в последние BiteZoneLength сегментов,
+        // не задевая защищённые первые, и только если кусать есть что
+        public static bool IsBiteIndex(int count, int hit)
+        {
+            if (count <= GameConfig.Bot.MinKeepSegments) return false;
+            if (hit < GameConfig.Bot.ProtectedSegments) return false;
+            return hit >= count - GameConfig.Bot.BiteZoneLength;
+        }
+
+        // Откусить игроку хвост с hitIndex до конца. Возвращает число отрезанных.
+        // Вызывается только из ProcessDeferredBites — там уже проверено,
+        // что hitIndex попадает в bite-зону
+        private int CutPlayerTail(int hitIndex)
+        {
+            int cut = _segments.Count - hitIndex;
+            for (int i = hitIndex; i < _segments.Count; i++)
+                _proxy.RemoveSegment(i);
+            _segments.RemoveRange(hitIndex, cut);
+            TrimSnapshot(_prevPositions, hitIndex);
+            TrimSnapshot(_nextPositions, hitIndex);
+            return cut;
+        }
+
+        private static void TrimSnapshot(List<Point3D> snap, int from)
+        {
+            if (snap.Count > from) snap.RemoveRange(from, snap.Count - from);
+        }
+
+        // Расстояние от точки до оси коридора лабиринта (MaxValue, если закрыт)
+        public double LabAxisDistance(Point3D p)
+        {
+            if (!_labOpen) return double.MaxValue;
+            Vector3D rel = new Vector3D(p.X - _labEntry.X, p.Y - _labEntry.Y, p.Z - _labEntry.Z);
+            double t = Vector3D.DotProduct(rel, _labAxis);
+            double span = GameConfig.Labyrinth.Spacing * GameConfig.Labyrinth.RingCount;
+            if (t < 0) t = 0;
+            if (t > span) t = span;
+            Vector3D on = new Vector3D(_labEntry.X + _labAxis.X * t,
+                                       _labEntry.Y + _labAxis.Y * t,
+                                       _labEntry.Z + _labAxis.Z * t);
+            double dx = p.X - on.X, dy = p.Y - on.Y, dz = p.Z - on.Z;
+            return Math.Sqrt(dx * dx + dy * dy + dz * dz);
+        }
+
+        // ═══════════════════════════════════════════════════════════════════
+        // БЛОК 14.1 ДИАГНОСТИКА БОТОВ
+        // ═══════════════════════════════════════════════════════════════════
+        // Переключение слоя ботов: 0 — сегменты, 1 — корабли, 2 — ореолы.
+        // Прокси сам знает, какие id к какому слою относятся.
+        public void ToggleBotLayer(int layer)
+        {
+            switch (layer)
+            {
+                case 0: _botsSegmentsOn = !_botsSegmentsOn; break;
+                case 1: _botsShipsOn = !_botsShipsOn; break;
+                case 2: _botsHalosOn = !_botsHalosOn; break;
+            }
+
+            _proxy.ShowBotLayer(0, _botsSegmentsOn);
+            _proxy.ShowBotLayer(1, _botsShipsOn);
+            _proxy.ShowBotLayer(2, _botsHalosOn);
+
+            System.Diagnostics.Trace.WriteLine(
+                $"[Слои] сегменты: {(_botsSegmentsOn ? "видимы" : "СКРЫТЫ")} | " +
+                $"корабли: {(_botsShipsOn ? "видимы" : "СКРЫТЫ")} | " +
+                $"ореолы: {(_botsHalosOn ? "видимы" : "СКРЫТЫ")}");
+        }
+
+        private bool _necksHidden = false;
+
+        // Тест: спрятать/показать только шейные сегменты ботов (клавиша 6)
+        public void ToggleBotNecks()
+        {
+            _necksHidden = !_necksHidden;
+            if (_necksHidden) _proxy.HideBotNecks();
+            else _proxy.ShowBotNecks();
+        }
+
+        // Тест: голый форс-апдейт вьюера (клавиша 5)
+        public void UpdateViewerOnly()
+        {
+            _proxy.UpdateViewerOnly();
+        }
+
+        // Диагностика: дамп атрибутов сегментов ботов (клавиша 4)
+        public void DumpSegmentAspects()
+        {
+            // ← тот же вызов прокси, что в ToggleBotNecks/UpdateViewerOnly
+            _proxy.DumpSegmentAspects();
+        }
+
+        public void ClearSegmentOffsets()
+        {
+            // ← тот же вызов прокси, что в DumpSegmentAspects
+            _proxy.ClearSegmentOffsets();
+        }
+
+        // Тумблер: скрытие хвостов ботов у кабины (клавиша 8)
+        public void ToggleBotTailHide()
+        {
+            _proxy.ToggleBotTailHide();   // ← имя поля/свойства прокси подставь фактическое:
+                                          //   то же, что внутри ToggleBotNecks
+        }
+        // Диагностика: что стоит под курсором (клавиша 9)
+        public void PickHole(int x, int y)
+        {
+            _proxy.PickHole(x, y);   // имя поля прокси — как в ToggleBotTailHide
+        }
     }
 }
 
 // ═══════════════════════════════════════════════════════════════════
-// БЛОК 13. ПОДВАЛ: заметки по подсветке
+// БЛОК 14. ПОДВАЛ: заметки по подсветке
 // ═══════════════════════════════════════════════════════════════════
 //ДЛЯ ПОДСВЕТКИ
 //Диагностика коллизии. Причина запаздывания — рассинхрон двух систем координат

@@ -27,6 +27,8 @@ namespace Snake3D
         private readonly List<System.Windows.Shapes.Rectangle> _healthCells = new();
         private readonly System.Windows.Shapes.Rectangle _hitFlash;
         private readonly System.Windows.Shapes.Rectangle _shieldFlash;
+        private readonly System.Windows.Shapes.Path _attackFlash;
+        private readonly System.Windows.Shapes.Path _attackFlashInner;
 
         public HudOverlay()
         {
@@ -40,7 +42,7 @@ namespace Snake3D
 
             Content = _canvas;
 
-        //Элементы:
+            //Элементы:
             //_crosshair(Path) — прицел: четыре штриха, нарисованные геометрией
             //M 0,-18 V - 6 M 0,6 V18 M -18,0 H - 6 M 6,0 H18.
             //Позиция меняется через TranslateTransform(PlaceCrosshair),
@@ -86,6 +88,32 @@ namespace Snake3D
             // Прозрачный фон панели — оверлей целиком прозрачный.
             _healthBar.Margin = new Thickness(24, 24, 0, 0);
             _healthBar.Orientation = System.Windows.Controls.Orientation.Horizontal;
+
+            // Внешняя: широкая мягкая — «свечение» сектора
+            _attackFlash = new System.Windows.Shapes.Path
+            {
+                Stroke = new SolidColorBrush(System.Windows.Media.Color.FromArgb(120, 0xFF, 0x20, 0x20)),
+                StrokeThickness = 22,
+                Opacity = 0,
+                IsHitTestVisible = false,
+                Data = Geometry.Parse("M -130,-330 A 355,355 0 0 1 130,-330")
+            };
+            _attackFlash.RenderTransform = new RotateTransform(0);
+            _canvas.Children.Add(_attackFlash);
+
+            // Внутренняя: узкая яркая — чёткий край сектора.
+            // Позиция и поворот дублируются из внешней в ShowAttackFlash
+            _attackFlashInner = new System.Windows.Shapes.Path
+            {
+                Stroke = new SolidColorBrush(System.Windows.Media.Color.FromArgb(255, 0xFF, 0x30, 0x30)),
+                StrokeThickness = 8,
+                Opacity = 0,
+                IsHitTestVisible = false,
+                Data = Geometry.Parse("M -130,-330 A 355,355 0 0 1 130,-330")
+            };
+            _attackFlashInner.RenderTransform = new RotateTransform(0);
+            _canvas.Children.Add(_attackFlashInner);
+
             _canvas.Children.Add(_healthBar);
         }
 
@@ -176,17 +204,38 @@ namespace Snake3D
             }
         }
 
+        // Показать сектор атаки. angleDeg: 0 — угроза сверху экрана,
+        // растёт по часовой. cx, cy — центр canvas
+        public void ShowAttackFlash(double angleDeg, double cx, double cy)
+        {
+            Canvas.SetLeft(_attackFlash, cx);
+            Canvas.SetTop(_attackFlash, cy);
+            ((RotateTransform)_attackFlash.RenderTransform).Angle = angleDeg;
+
+            Canvas.SetLeft(_attackFlashInner, cx);
+            Canvas.SetTop(_attackFlashInner, cy);
+            ((RotateTransform)_attackFlashInner.RenderTransform).Angle = angleDeg;
+
+            var anim = new System.Windows.Media.Animation.DoubleAnimation(
+                0.95, 0.0, TimeSpan.FromMilliseconds(700));
+            _attackFlash.BeginAnimation(OpacityProperty, anim);
+            _attackFlashInner.BeginAnimation(OpacityProperty, anim);
+        }
+
         // Вспышка: цвет заливки + анимация прозрачности от 0.55 до 0 за 350 мс
         private void Flash(System.Windows.Shapes.Rectangle rect, System.Windows.Media.Color color)
         {
             rect.Fill = new SolidColorBrush(color);
             var anim = new System.Windows.Media.Animation.DoubleAnimation(
                 0.55, 0.0, TimeSpan.FromMilliseconds(350));
-            rect.Opacity = 0.55;
             rect.BeginAnimation(OpacityProperty, anim);
         }
 
-        public void ShowRedFlash() => Flash(_hitFlash, System.Windows.Media.Color.FromRgb(0xFF, 0x30, 0x30));
+        public void ShowRedFlash()
+        {
+            System.Diagnostics.Trace.WriteLine("[HUD] ShowRedFlash");
+            Flash(_hitFlash, System.Windows.Media.Color.FromRgb(0xFF, 0x30, 0x30)); 
+        }
         public void ShowBlueFlash() => Flash(_shieldFlash, System.Windows.Media.Color.FromRgb(0x40, 0xA0, 0xFF));
     }
 }

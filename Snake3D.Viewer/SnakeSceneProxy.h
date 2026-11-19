@@ -118,10 +118,11 @@ using namespace System::Runtime::InteropServices;
 namespace
 {
 	int CountAlive(const std::vector<Handle(AIS_Shape)>* v);   // forward declaration
-	const int    LabRingCount = 6;
-	const double LabOuterR = 4.0;
-	const double LabSpacing = 6.0;
-	//const double LabPassCd = 0.0;   // кулдаун считает C#-сторона, здесь не нужен
+	const int    LabRingCount = 10;    // было 6
+	const double LabOuterR = 5.0;   // радиус тора (труба кольца)
+	const double LabTubeR = 0.6;   // толщина самой трубы — проход ~4.4, стало шире
+	const double LabSpacing = 9.0;   // было 6
+	const double LabBendR = 45.0;  // радиус изгиба коридора: больше — плавнее
 }
 
 namespace Snake3DViewer
@@ -180,6 +181,7 @@ namespace Snake3DViewer
 		std::vector<gp_Pnt>* _positions;
 		std::vector<gp_Vec>* _segmentDirs;
 		std::vector<gp_Pnt>* _segApplied;      // последняя реально применённая позиция
+
 		double _segAppliedSpin = -1e9;
 		double _camDebt = 0.0;   // накопленный за последние кадры угол поворота камеры
 		double _headAppliedX = 1e9, _headAppliedY = 1e9, _headAppliedZ = 1e9;
@@ -217,6 +219,12 @@ namespace Snake3DViewer
 		NCollection_Haft<Handle(AIS_Shape)> _shipShield;
 		bool _shipShieldOn = false;
 
+		//боты
+		// Ореолы ботов: по щиту и бусту на каждый корабль (3 слота).
+		// Тот же механизм владения, что у _shields/_boosts
+		std::vector<Handle(AIS_Shape)>* _botShieldHalo;
+		std::vector<Handle(AIS_Shape)>* _botBoostHalo;
+
 		// ── 2.8.1 Ускорение ──
 		std::vector<Handle(AIS_Shape)>* _boosts;
 		std::vector<gp_Pnt>* _boostBase;
@@ -232,9 +240,20 @@ namespace Snake3DViewer
 
 		//-- Лабиринт -- 
 		std::vector<Handle(AIS_Shape)>* _labRings;   // кольца коридора
+		std::vector<gp_Pnt>* _labPts;				 // центры колец: осевая ломаная для детектора
 		gp_Ax2* _labAxis;							 // ось коридора: вход + направление
-		std::map<int, double>* _labState;			 // id сущности → пройденная глубина
-		bool _labOpen;
+		std::map<int, int>* _labState;			 // id сущности → пройденная глубина
+		bool _labOpen = false;
+		int _labRingTotal = 0;
+
+		array<bool>^ _cockpitHidden;
+		array<double>^ _cockpitTrLast;
+		// Слоты, скрытые намеренно (HideSegment): CockpitHide их не показывает
+		// и RestoreCockpitHidden не возвращает — корабль остаётся чистым.
+		// -1 — свободная ячейка, индексы докидываются по мере регистрации
+		array<int>^ _cockpitPinned = gcnew array<int>(16);
+		int _cockpitPinnedCount = 0;
+
 
 		// ── 2.10 Загруженные STEP-модели (индексы kind) ──
 		std::vector<TopoDS_Shape*>* _models;            // 0=голова, 1=хвост, 2=кристалл, 4=мина
@@ -301,6 +320,7 @@ namespace Snake3DViewer
 		std::vector<Handle(AIS_Shape)>* _weaponShells;
 
 		bool _cullEnabled = true;
+		int _haloLayer = -1;   // отдельный слой ореолов: без записи глубины
 
 	public:
 		// ═══════════════════════════════════════════════════════════════
@@ -342,8 +362,9 @@ namespace Snake3DViewer
 			_shipShield() = NULL;
 
 			_labRings = new std::vector<Handle(AIS_Shape)>();
+			_labPts = new std::vector<gp_Pnt>();
 			_labAxis = new gp_Ax2();
-			_labState = new std::map<int, double>();
+			_labState = new std::map<int, int>();
 			_labOpen = false;
 
 			_boosts = new std::vector<Handle(AIS_Shape)>();
@@ -367,6 +388,10 @@ namespace Snake3DViewer
 			_weapons = new std::vector<Handle(AIS_Shape)>();
 			_weaponBase = new std::vector<gp_Pnt>();
 			_weaponShells = new std::vector<Handle(AIS_Shape)>();
+
+			// Ореолы ботов: три пустых слота под каждого бота
+			_botShieldHalo = new std::vector<Handle(AIS_Shape)>(3);
+			_botBoostHalo = new std::vector<Handle(AIS_Shape)>(3);
 		}
 
 		//Под капотом:
@@ -435,9 +460,13 @@ namespace Snake3DViewer
 			delete _weaponBase;     _weaponBase = nullptr;
 			delete _weaponShells;   _weaponShells = nullptr;
 
-			delete _labRings;  _labRings = nullptr;
-			delete _labAxis;   _labAxis = nullptr;
-			delete _labState;  _labState = nullptr;
+			delete _labRings;		_labRings = nullptr;
+			delete _labPts;			_labPts = nullptr;
+			delete _labAxis;		_labAxis = nullptr;
+			delete _labState;		_labState = nullptr;
+						
+			delete _botShieldHalo;		_botShieldHalo = nullptr;
+			delete _botBoostHalo;		_botBoostHalo = nullptr;
 		}
 
 		!SnakeSceneProxy()
@@ -489,8 +518,12 @@ namespace Snake3DViewer
 			delete _weaponShells;   _weaponShells = nullptr;
 
 			delete _labRings;  _labRings = nullptr;
+			delete _labPts;	   _labPts = nullptr;
 			delete _labAxis;   _labAxis = nullptr;
 			delete _labState;  _labState = nullptr;
+
+			delete _botShieldHalo;		_botShieldHalo = nullptr;
+			delete _botBoostHalo;		_botBoostHalo = nullptr;
 		}
 
 
@@ -710,11 +743,11 @@ namespace Snake3DViewer
 
 				//// Заполняющий: с обратной стороны (снизу-спереди), слабый и холодный —
 				//// подсвечивает то, что солнце оставило в тени. Замена амбиенту.
-				//Handle(V3d_DirectionalLight) fill = new V3d_DirectionalLight(gp_Dir(0.0, 1.0, 0.5));
-				//fill->SetColor(Quantity_Color(0.35, 0.38, 0.45, Quantity_TOC_RGB));
-				//fill->SetIntensity(0.4);
-				//_viewer()->AddLight(fill);
-				//_viewer()->SetLightOn(fill);
+				Handle(V3d_DirectionalLight) fill = new V3d_DirectionalLight(gp_Dir(0.0, 1.0, 0.5));
+				fill->SetColor(Quantity_Color(0.35, 0.38, 0.45, Quantity_TOC_RGB));
+				fill->SetIntensity(0.4);
+				_viewer()->AddLight(fill);
+				_viewer()->SetLightOn(fill);
 
 				_view() = _viewer()->CreateView();                     //Вьюпорт
 
@@ -740,7 +773,7 @@ namespace Snake3DViewer
 
 				// Начальный угол камеры (смотрим немного сверху и сбоку)
 				_view()->SetProj(V3d_XposYposZpos);
-
+				
 				_view()->MustBeResized();
 				_view()->RedrawImmediate();
 			}
@@ -790,6 +823,7 @@ namespace Snake3DViewer
 			RemoveBoost();
 			SetShipShield(false, 0.0);
 			SetShipBoost(false, 0.0);
+			RemoveBotHalos();
 
 			for (auto& h : *_crystalHalos)
 				if (!h.IsNull() && !_aisContext().IsNull())
@@ -917,7 +951,44 @@ namespace Snake3DViewer
 				TopoDS_Shape* tailModel = GetModel(1);
 				if (tailModel != nullptr)
 				{
-					aisShape = new AIS_Shape(*tailModel);
+					// Хвост рисуется нативным размером STEP-модели. Если модель
+					// крупнее боевого радиуса сегмента, её сфера физически входит
+					// в объём корпуса и «съедает» его куски с любого ракурса.
+					// Лечим: один раз строим масштабированную копию под radius.
+
+					// Насколько крупнее боевого радиуса рисуем хвост:
+					// 1.0 = впритык (как было), 1.5 = в полтора раза крупнее
+					static const double kTailSizeBoost = 1.5;
+
+					static double tailScale = 0.0;      // посчитать один раз за сессию
+					if (tailScale <= 0.0)
+					{
+						Bnd_Box box;
+						BRepBndLib::Add(*tailModel, box);
+						Standard_Real xmin, ymin, zmin, xmax, ymax, zmax;
+						box.Get(xmin, ymin, zmin, xmax, ymax, zmax);
+						double r = 0.5 * std::sqrt(
+							(xmax - xmin) * (xmax - xmin) +
+							(ymax - ymin) * (ymax - ymin) +
+							(zmax - zmin) * (zmax - zmin));
+						tailScale = (r > 1e-9) ? (radius * kTailSizeBoost / r) : 1.0;
+						System::Diagnostics::Trace::WriteLine(System::String::Format(
+							"[Tail] радиус модели хвоста={0:F2} → боевой радиус={1:F2}, масштаб={2:F3}",
+							r, radius, tailScale));
+					}
+
+					// Масштабированная копия — тоже один раз, дальше без затрат.
+					// Если у игрока и ботов РАЗНЫЕ радиусы сегментов — замени
+					// static на std::map<double, TopoDS_Shape> с ключом radius.
+					static TopoDS_Shape scaledTail;
+					if (scaledTail.IsNull())
+					{
+						gp_Trsf scaleTrsf;
+						scaleTrsf.SetScale(gp_Pnt(0, 0, 0), tailScale);
+						scaledTail = BRepBuilderAPI_Transform(*tailModel, scaleTrsf, Standard_True).Shape();
+					}
+
+					aisShape = new AIS_Shape(scaledTail);
 					aisShape->SetColor(tailColor);
 					aisShape->SetTransparency(0.0);
 					basePos = gp_Pnt(0, 0, 0);
@@ -982,6 +1053,7 @@ namespace Snake3DViewer
 			if ((*_snakeSegments)[index].IsNull()) return;
 			if (!_aisContext().IsNull())
 				_aisContext()->Erase((*_snakeSegments)[index], Standard_False);
+			PinSegmentHidden(index);   // закрепить: CockpitHide не покажет этот слот никогда
 			_frameDirty++;
 		}
 
@@ -1167,12 +1239,18 @@ namespace Snake3DViewer
 
 		void RemoveAllSnake()
 		{
+			// Скрытие из кабины переживать рестарт нельзя: флаги по индексам
+			// повиснут на новых сегментах после respawn — вернём всё скрытое
+			RestoreCockpitHidden();
+			_cockpitPinnedCount = 0;
+
+			int erased = 0;
 			for (auto& seg : *_snakeSegments)
 			{
 				if (seg.IsNull()) continue;   // заглушка корабля — стирать нечего
-				if (!_aisContext().IsNull())
-					_aisContext()->Erase(seg, Standard_False);
+				if (!_aisContext().IsNull()) { _aisContext()->Erase(seg, Standard_False); ++erased; }
 			}
+			
 			_snakeSegments->clear();
 			_basePositions->clear();
 			_positions->clear();
@@ -1180,12 +1258,7 @@ namespace Snake3DViewer
 			_segApplied->clear();
 			if (!_aisContext().IsNull())
 				_aisContext()->UpdateCurrentViewer();
-			_frameDirty++;
-
-			//диагностика
-			int erased = 0;
-			for (auto& seg : *_snakeSegments)
-				if (!seg.IsNull() && !_aisContext().IsNull()) { _aisContext()->Erase(seg, Standard_False); ++erased; }
+			_frameDirty++;			
 
 			System::Diagnostics::Trace::WriteLine(
 				System::String::Format("[Reset] сегментов стёрто: {0}", erased));
@@ -2068,6 +2141,47 @@ namespace Snake3DViewer
 			_frameDirty++;
 		}
 
+		// Ореол защиты бота: кокон как у игрока. on=true — создание,
+		// on=false — стирание. Позицию ведёт PlaceBotShip
+		void SetBotShipShield(int botId, bool on, double radius)
+		{
+			if (botId < 0 || botId >= (int)_botShieldHalo->size()) return;
+
+			Handle(AIS_Shape)& halo = (*_botShieldHalo)[botId];
+			if (!on && halo.IsNull()) return;
+
+			if (!halo.IsNull() && !_aisContext().IsNull())
+				_aisContext()->Erase(halo, Standard_False);
+			halo = NULL;
+
+			if (!on) { _frameDirty++; return; };
+
+			static const double axes[3][3] = {
+				{ 0.0,  0.7, 0.7 },
+				{ 0.7,  0.0, 0.7 },
+				{ 0.0, -0.7, 0.7 }
+			};
+
+			TopoDS_Compound shell;
+			BRep_Builder bb;
+			bb.MakeCompound(shell);
+			bb.Add(shell, BRepPrimAPI_MakeSphere(radius).Shape());
+			for (int k = 0; k < 3; ++k)
+			{
+				gp_Ax2 ax(gp_Pnt(0, 0, 0), gp_Dir(axes[k][0], axes[k][1], axes[k][2]));
+				bb.Add(shell, BRepBuilderAPI_MakeEdge(gp_Circ(ax, radius * 0.98)).Edge());
+			}
+
+			Handle(AIS_Shape) s = new AIS_Shape(shell);
+			s->SetDisplayMode(1);
+			s->SetColor(Quantity_Color(0.10, 0.85, 0.70, Quantity_TOC_RGB)); // бирюза
+			s->SetTransparency(0.75);
+			halo = s;
+			_aisContext()->Display(s, Standard_False);
+			if (_haloLayer >= 0) halo->SetZLayer(_haloLayer);
+			_frameDirty++;
+		}
+
 		// Щит снят с арены: пропало время или подобран игроком
 		void RemoveShield()
 		{
@@ -2193,6 +2307,29 @@ namespace Snake3DViewer
 			_frameDirty++;
 		}
 
+		// Ореол ускорения бота: сфера без клетки, оранжевый
+		void SetBotShipBoost(int botId, bool on, double radius)
+		{
+			if (botId < 0 || botId >= (int)_botBoostHalo->size()) return;
+
+			Handle(AIS_Shape)& halo = (*_botBoostHalo)[botId];
+			if (!on && halo.IsNull()) return;
+
+			if (!halo.IsNull() && !_aisContext().IsNull())
+				_aisContext()->Erase(halo, Standard_False);
+			halo = NULL;
+
+			if (!on) { _frameDirty++; return; };
+
+			Handle(AIS_Shape) s = new AIS_Shape(BRepPrimAPI_MakeSphere(radius).Shape());
+			s->SetDisplayMode(1);
+			s->SetColor(Quantity_Color(1.00, 0.55, 0.10, Quantity_TOC_RGB)); // оранжевый
+			s->SetTransparency(0.80);
+			halo = s;
+			_aisContext()->Display(s, Standard_False);
+			_frameDirty++;
+		}
+
 		void RemoveBoost()
 		{
 			if (!_aisContext().IsNull())
@@ -2205,6 +2342,28 @@ namespace Snake3DViewer
 			_boosts->clear();
 			_boostBase->clear();
 			_boostShells->clear();
+			_frameDirty++;
+		}
+
+		// Гасим ореолы всех ботов разом: рестарт, выход в меню, разрушение прокси.
+		// Идемпотентен — вызывай когда угодно
+		void RemoveBotHalos()
+		{
+			if (!_aisContext().IsNull())
+			{
+				for (size_t i = 0; i < _botShieldHalo->size(); ++i)
+					if (!(*_botShieldHalo)[i].IsNull())
+						_aisContext()->Erase((*_botShieldHalo)[i], Standard_False);
+				for (size_t i = 0; i < _botBoostHalo->size(); ++i)
+					if (!(*_botBoostHalo)[i].IsNull())
+						_aisContext()->Erase((*_botBoostHalo)[i], Standard_False);
+			}
+
+			_botShieldHalo->clear();
+			_botShieldHalo->resize(3);
+			_botBoostHalo->clear();
+			_botBoostHalo->resize(3);
+
 			_frameDirty++;
 		}
 
@@ -2405,11 +2564,41 @@ namespace Snake3DViewer
 
 			if (model != nullptr)
 			{
-				// Модель снаряда загрузили — используем её
-				aisShape = new AIS_Shape(*model);
+				// Модель снаряда: масштабируем под боевой размер, как хвост.
+				// Без этого модель рисуется нативным размером —size и
+				// ProjectileVisualScale на неё не влияют
+				static const double kProjSizeBoost = 1.5;
+
+
+				// Целевой радиус: считает C# (size), здесь только множитель поверх
+				static double projScale = 0.0;      // посчитать один раз за сессию
+				if (projScale <= 0.0)
+				{
+					Bnd_Box box;
+					BRepBndLib::Add(*model, box);
+					Standard_Real xmin, ymin, zmin, xmax, ymax, zmax;
+					box.Get(xmin, ymin, zmin, xmax, ymax, zmax);
+					double r = 0.5 * std::sqrt(
+						(xmax - xmin) * (xmax - xmin) +
+						(ymax - ymin) * (ymax - ymin) +
+						(zmax - zmin) * (zmax - zmin));
+					projScale = (r > 1e-9) ? (size * kProjSizeBoost / r) : 1.0;
+					System::Diagnostics::Trace::WriteLine(System::String::Format(
+						"[Proj] радиус модели снаряда={0:F2} → целевой радиус={1:F2}, масштаб={2:F3}",
+						r, size * kProjSizeBoost, projScale));
+				}
+
+				static TopoDS_Shape scaledProj;
+				if (scaledProj.IsNull())
+				{
+					gp_Trsf scaleTrsf;
+					scaleTrsf.SetScale(gp_Pnt(0, 0, 0), projScale);
+					scaledProj = BRepBuilderAPI_Transform(*model, scaleTrsf, Standard_True).Shape();
+				}
+
+				aisShape = new AIS_Shape(scaledProj);
 				aisShape->SetColor(Quantity_Color(_projR, _projG, _projB, Quantity_TOC_RGB));
 				aisShape->SetTransparency(0.0);
-
 			}
 			else
 			{
@@ -2770,11 +2959,12 @@ namespace Snake3DViewer
 			if (_viewMode == 1)
 			{
 				// Кабина
-				camBack = 2.0;    // чуть позади центра головы — нос виден внизу экрана
-				camUp = 1.0;    // немного выше оси, видно "капот"
+				camBack = 3.5;      // глаз за кормой корпуса — геометрия корабля
+									// больше не пересекает плоскость глаза
+				camUp = 1.5;        // чуть ниже оси — корма в кадре видна, нос не прячется
 				lookAhead = 30.0;   // далеко вперёд — хороший обзор арены
-				fov = 75.0;   // широкое поле зрения
-				lerpSpeed = 1.0;    // быстрый лерп, кабина не отстаёт от поворотов				
+				fov = 75.0;         // широкое поле зрения
+				lerpSpeed = 1.0;    // быстрый лерп, кабина не отстаёт от поворотов
 			}
 			else
 			{
@@ -2803,14 +2993,14 @@ namespace Snake3DViewer
 				fdNow.Normalize();
 			else
 				fdNow = gp_Vec(0.0, 0.0, 1.0);
-			//fdNow.Normalize();
+
 			static double s_prevFx = 0.0, s_prevFy = 0.0, s_prevFz = 0.0;
 			static bool s_prevValid = false;
 			if (s_prevValid)
 			{
 				double d = fdNow.X() * s_prevFx + fdNow.Y() * s_prevFy + fdNow.Z() * s_prevFz;
 				if (d < 1.0)
-					_camDebt = min(_camDebt + acos(max(-1.0, min(1.0, d))), 1.0);
+					_camDebt = min(_camDebt + acos(max(-1.0, min(1.0, d))), 1.8);
 			}
 			s_prevValid = true;
 			s_prevFx = fdNow.X(); s_prevFy = fdNow.Y(); s_prevFz = fdNow.Z();
@@ -2824,18 +3014,24 @@ namespace Snake3DViewer
 				s_lastFov = fov;
 			}
 
-			// Плоскости отсечения: в кабине глаз в 2 юнитах от головы,
+			// Плоскости отсечения: в кабине глаз в ~2.9 юнитах от головы,
 			// сегменты ботов пролетают вплотную — дефолтный zNear (порядка
 			// единицы) срезал геометрию у глаза («проваливается и появляется»).
-			// Ставим ближнюю плоскость на 0.05 юнита — ближе к глазу ничего
-			// не срезается, точность глубины страдает незначительно при far ~1000.
-			// Плоскости отсечения: сверяемся с фактическим состоянием камеры,
-			// а не со статикой — если камеру пересоздали (ресайз, пауза, меню),
-			// дефолтный zNear вернётся, и нужно переставить плоскость заново.
-			if (abs(cam->ZNear() - 0.075) > 1e-6 ||
-				abs(cam->ZFar() - 1000.0) > 1e-6)
+			// Сверяемся с фактическим состоянием камеры, а не со статикой —
+			// если камеру пересоздали (ресайз, пауза, меню), дефолтный
+			// zNear вернётся, и нужно переставить плоскости заново.
+			// v2.0: плоскости по режиму. В кабине far 400 достаточно
+			// (диагональ арены ~200 с запасом) — соотношение far/near падает
+			// с 13000 до 8000, z-буфер на ближних дистанциях точнее втрое,
+			// z-файтинг корпуса с сегментами уходит. В дефолте near 0.5 —
+			// глаз в 10 юнитах, ближе 0.5 ничего нормального не бывает,
+			// точность глубины выигрывает ещё сильнее (2400 против 5333)
+			double zNear = (_viewMode == 1) ? 0.1 : 0.5;
+			double zFar = (_viewMode == 1) ? 200.0 : 1200.0;
+			if (abs(cam->ZNear() - zNear) > 1e-6 ||
+				abs(cam->ZFar() - zFar) > 1e-6)
 			{
-				cam->SetZRange(0.075, 1000.0);
+				cam->SetZRange(zNear, zFar);
 				_frameDirty++;
 			}
 
@@ -2869,10 +3065,43 @@ namespace Snake3DViewer
 				_frameDirty++;
 				_camEyeX = desiredEyeX; _camEyeY = desiredEyeY; _camEyeZ = desiredEyeZ;
 				_camDirX = _dirX; _camDirY = _dirY; _camDirZ = _dirZ;
-				return;
+
+				// Смена режима — скрытие/восстановление прямо здесь,
+				// иначе один кадр висит со стёртыми сегментами
+				if (_viewMode == 1) UpdateCockpitHide(desiredEyeX, desiredEyeY, desiredEyeZ,
+					_dirX, _dirY, _dirZ);
+				//else RestoreCockpitHidden();
+				UpdateBotTailsNearCockpit();
+				return;				
 			}
 
-			// 3. Текущие позиции			
+			// Кабина: скрытие ближних сегментов по дистанции до глаза.
+			// Стоит ДО guard'а: сегменты двигаются каждый тик, даже когда
+			// камера стоит, — guard обязан их пропускать. И обрабатываем
+			// выход из кабины: стёртые в кабине сегменты обязаны вернуться
+			{
+				gp_Pnt eyeNow = cam->Eye();
+				FixHaloLayers();   // ореолы всегда в своём слое, даже после пересоздания
+				if (_viewMode == 1)
+				{
+					//UpdateCockpitHide(eyeNow.X(), eyeNow.Y(), eyeNow.Z(),
+						//_dirX, _dirY, _dirZ);
+					UpdateBotTailsNearCockpit();
+				}
+				else if (_cockpitHidden != nullptr)
+				{
+					// Вышли из кабины — вернуть всё скрытое
+					/*for (int i = 0; i < _cockpitHidden->Length && i < (int)_snakeSegments->size(); ++i)
+					{
+						if (_cockpitHidden[i] && !(*_snakeSegments)[i].IsNull())
+							_aisContext()->Display((*_snakeSegments)[i], Standard_False);
+					}
+					_cockpitHidden = nullptr;*/
+					RestoreCockpitHidden();
+				}
+			}
+
+			// 3. Текущие позиции
 			gp_Pnt currentEye = cam->Eye();
 			gp_Pnt currentAt = cam->Center();
 
@@ -2910,24 +3139,196 @@ namespace Snake3DViewer
 			_frameDirty++;
 
 			_camEyeX = newEyeX; _camEyeY = newEyeY; _camEyeZ = newEyeZ;
-			_camDirX = _dirX;   _camDirY = _dirY;   _camDirZ = _dirZ;
+			_camDirX = _dirX;   _camDirY = _dirY;   _camDirZ = _dirZ;			
 		}
 
-		// Кабина: первые 2 сегмента хвоста проходят сквозь глаз
-		// (глаз в 2.24 юнита от центра головы, сегменты на шаге ~2-2.5).
-		// Они перекрывают корпус в кадре и мерцают при пересечении глаза.
-		// В кабине скрываем, в следящей камере показываем.
+		// Шлюз для C#. Исполнителей два: UpdateCockpitHide (каждый кадр в кабине)
+		// и RestoreCockpitHidden (выход из кабины). Метод не должен сам трогать
+		// флаги, кроме сброса при входе: пусть первый UpdateCockpitHide
+		// расставит скрытие заново с чистого состояния
 		void SetCockpitHide(bool on)
 		{
-			if (_aisContext().IsNull()) return;
-			for (int i = 1; i <= 7 && i < static_cast<int>(_snakeSegments->size()); ++i)
+			if (on) _cockpitHidden = nullptr;    // старт с чистого
+			else    RestoreCockpitHidden();      // выход: вернуть скрытое
+		}
+
+		// Регистрация намеренно скрытого слота. Все «служебные» скрытия
+		// сходятся сюда: закреплённые слоты CockpitHide не показывает никогда
+		void PinSegmentHidden(int index)
+		{
+			if (IsPinned(index)) return;
+			if (_cockpitPinnedCount >= _cockpitPinned->Length)
 			{
-				if ((*_snakeSegments)[i].IsNull()) continue;
-				if (on) _aisContext()->Erase((*_snakeSegments)[i], Standard_False);
-				else    _aisContext()->Display((*_snakeSegments)[i], Standard_False);
+				array<int>^ grown = gcnew array<int>(_cockpitPinned->Length * 2);
+				for (int k = 0; k < _cockpitPinned->Length; ++k) grown[k] = _cockpitPinned[k];
+				_cockpitPinned = grown;
 			}
-			_frameDirty++;
-			_aisContext()->UpdateCurrentViewer();
+			_cockpitPinned[_cockpitPinnedCount++] = index;
+		}
+
+		bool IsPinned(int index)
+		{
+			for (int k = 0; k < _cockpitPinnedCount; ++k)
+				if (_cockpitPinned[k] == index) return true;
+			return false;
+		}
+
+		void FixHaloLayers()
+		{
+			if (_aisContext().IsNull()) return;
+
+			for (auto& h : *_crystalHalos)
+				if (!h.IsNull()) h->SetZLayer(Graphic3d_ZLayerId_Top);
+			for (auto& h : *_botShieldHalo)
+				if (!h.IsNull()) h->SetZLayer(Graphic3d_ZLayerId_Top);
+			for (auto& h : *_botBoostHalo)
+				if (!h.IsNull()) h->SetZLayer(Graphic3d_ZLayerId_Top);
+			if (!_shipShield().IsNull()) _shipShield()->SetZLayer(Graphic3d_ZLayerId_Top);
+			if (!_shipBoost().IsNull())  _shipBoost()->SetZLayer(Graphic3d_ZLayerId_Top);
+		}
+
+		// Кабина: скрытие только ближних кусков ПЕРЕД глазом. Кусок сбоку
+		// или за спиной вид не загораживает — прятать его не нужно: он и был
+		// тем самым «пропавшим куском». Радиусы ужаты до реальной помехи,
+		// конус не даёт прятать борта и хвост, уходящий в сторону
+		void UpdateCockpitHide(double eyeX, double eyeY, double eyeZ,
+			double fx, double fy, double fz)
+		{
+			if (_aisContext().IsNull() || _snakeSegments == nullptr) return;
+
+			// Чистая дистанционная прозрачность, без конуса: корпус жёсткий,
+			// дистанции глаз→сегменты при манёврах не меняются — значение
+			// выставляется один раз и не дёргается. Конус убран: именно его
+			// граница давала мерцание при поворотах
+			const double hideD = 3.2;   // ближе — почти невидим
+			const double fadeD = 6.0;   // дальше — плотный; между — линейный спад
+			int segCount = static_cast<int>(_snakeSegments->size());
+
+			if (_cockpitTrLast == nullptr || _cockpitTrLast->Length != segCount)
+			{
+				array<double>^ fresh = gcnew array<double>(segCount);
+				for (int i = 0; i < segCount; ++i) fresh[i] = -1.0;
+				_cockpitTrLast = fresh;
+			}
+
+			const int kBotBase = 10000;
+
+			for (int i = 0; i < segCount; ++i)
+			{
+				if (i >= kBotBase) continue;
+				if ((*_snakeSegments)[i].IsNull()) continue;
+
+				if (IsPinned(i))
+				{
+					if (_cockpitTrLast[i] < 0.0)
+					{
+						_cockpitTrLast[i] = 0.0;
+						_aisContext()->Erase((*_snakeSegments)[i], Standard_False);
+					}
+					continue;
+				}
+
+				double px = (*_positions)[i].X();
+				double py = (*_positions)[i].Y();
+				double pz = (*_positions)[i].Z();
+				double dx = px - eyeX, dy = py - eyeY, dz = pz - eyeZ;
+				double d = System::Math::Sqrt(dx * dx + dy * dy + dz * dz);
+
+				double tr;
+				if (d <= hideD)      tr = 1.0;
+				else if (d >= fadeD) tr = 0.0;
+				else                 tr = 1.0 * (fadeD - d) / (fadeD - hideD);
+
+				if (_cockpitTrLast[i] < 0.0 || System::Math::Abs(tr - _cockpitTrLast[i]) > 0.02)
+				{
+					_cockpitTrLast[i] = tr;
+					_aisContext()->SetTransparency((*_snakeSegments)[i], tr, Standard_True);
+					_frameDirty++;
+				}
+			}
+		}
+
+		static bool _tailHideOn = true;          // тумблер (клавиша 8)
+		static const double kTailHideRadius = 6.0;
+
+		void UpdateBotTailsNearCockpit()
+		{
+			if (!_tailHideOn || _aisContext().IsNull()) return;
+			if (_view().IsNull()) return;
+			Handle(Graphic3d_Camera) cam = _view()->Camera();
+			if (cam.IsNull()) return;
+
+			const gp_Pnt eye(cam->Eye().X(), cam->Eye().Y(), cam->Eye().Z());
+			const double r2 = kTailHideRadius * kTailHideRadius;
+
+			int hidden = 0, restored = 0;
+			for (int id = 10000; id < 10000 + 4 * 512; ++id)
+			{
+				if (id >= static_cast<int>(_snakeSegments->size())) break;
+				if ((*_snakeSegments)[id].IsNull()) continue;
+				if (id % 512 < 2) continue;   // слоты 0–1 бота спрятаны навсегда — не трогаем
+
+				const gp_Pnt& pos = (*_positions)[id];
+				double dx = pos.X() - eye.X();
+				double dy = pos.Y() - eye.Y();
+				double dz = pos.Z() - eye.Z();
+				bool isNear = (dx * dx + dy * dy + dz * dz) < r2;
+				bool displayed = _aisContext()->IsDisplayed((*_snakeSegments)[id]);
+
+				if (isNear && displayed)
+				{
+					_aisContext()->Erase((*_snakeSegments)[id], Standard_False);
+					++hidden;
+				}
+				else if (!isNear && !displayed)
+				{
+					_aisContext()->Display((*_snakeSegments)[id], Standard_False);
+					++restored;
+				}
+			}
+			if (hidden || restored)
+			{
+				_aisContext()->UpdateCurrentViewer();
+				_frameDirty++;
+				System::Diagnostics::Trace::WriteLine(System::String::Format(
+					"[TailHide] спрятано {0} | возвращено {1}", hidden, restored));
+			}
+		}
+
+		void ToggleBotTailHide()
+		{
+			_tailHideOn = !_tailHideOn;
+			if (!_tailHideOn)
+			{
+				// вернуть всё спрятанное этим механизмом (пины 0–1 не трогаем)
+				for (int id = 10000; id < 10000 + 4 * 512; ++id)
+				{
+					if (id >= static_cast<int>(_snakeSegments->size())) break;
+					if (id % 512 < 2) continue;
+					if ((*_snakeSegments)[id].IsNull()) continue;
+					if (!_aisContext()->IsDisplayed((*_snakeSegments)[id]))
+						_aisContext()->Display((*_snakeSegments)[id], Standard_False);
+				}
+				_aisContext()->UpdateCurrentViewer();
+			}
+			System::Diagnostics::Trace::WriteLine(System::String::Format(
+				"[TailHide] вкл={0}", _tailHideOn));
+		}
+
+		// Выход из кабины: вернуть всё скрытое, сбросить состояние
+		void RestoreCockpitHidden()
+		{
+			if (_aisContext().IsNull() || _snakeSegments == nullptr) return;
+			if (_cockpitTrLast == nullptr) return;
+			for (int i = 0; i < _cockpitTrLast->Length && i < (int)_snakeSegments->size(); ++i)
+			{
+				if (_cockpitTrLast[i] <= 0.0) continue;
+				if ((*_snakeSegments)[i].IsNull()) continue;
+				if (IsPinned(i)) continue;   // пины остаются стёртыми
+				_aisContext()->SetTransparency((*_snakeSegments)[i], 0.0, Standard_True);
+				_cockpitTrLast[i] = 0.0;
+			}
+			_cockpitTrLast = nullptr;
 		}
 
 		// ═══════════════════════════════════════════════════════════════
@@ -2988,6 +3389,12 @@ namespace Snake3DViewer
 			double dy = py - eye.Y();
 			double dz = pz - eye.Z();
 			double dist = sqrt(dx * dx + dy * dy + dz * dz);
+
+			// Близкая геометрия не замораживается никогда: у глаза угловая
+			// проверка вырождена (радиус объекта сопоставим с дистанцией),
+			// цена ошибки — исчезнувший кусок кадра. Близких объектов мало,
+			// куллинг дальше 10 юнитов продолжает работать
+			if (dist < 10.0) return true;
 
 			if (dist > maxDist) return false;
 			if (dist < 1e-9) return true;
@@ -3092,7 +3499,11 @@ namespace Snake3DViewer
 				_dbgTrsfOther++; _frameDirty++;
 			}
 
-			//ореол садится на общий кадр корабля
+			// Ореол садится на общий кадр корабля.
+			// В кабине (viewMode==1) глаз стоит в ~2,9 от центра корабля — если радиус
+			// клетки больше, глаз попадает внутрь: клетка заполняет экран и мерцает
+			// на границе. Сжимаем гало до радиуса < 2,4 (фактор 0,70 от 3,4) —
+			// глаз всегда снаружи, купол остаётся видимым эффектом защиты
 			if (_shipShieldOn && !_shipShield().IsNull())
 			{
 				// Вращение кокона вокруг локальной вертикали корабля: ось (0,0,1)
@@ -3100,7 +3511,18 @@ namespace Snake3DViewer
 				// с кристаллами — весь «живой» слой арены крутится в ногу.
 				gp_Trsf spin;
 				spin.SetRotation(gp_Ax1(gp_Pnt(0, 0, 0), gp_Dir(0, 0, 1)), _spinAngle);
-				_shipShield()->SetLocalTransformation(head.Multiplied(spin));
+
+				if (_viewMode == 1)
+				{
+					// Масштаб вокруг нуля (геометрия центрирована), затем кадр корабля.
+					// Масштаб и вращение вокруг одной точки коммутируют — порядок в паре не важен
+					gp_Trsf shrink;
+					shrink.SetScale(gp_Pnt(0, 0, 0), 0.70);
+					_shipShield()->SetLocalTransformation(head.Multiplied(spin.Multiplied(shrink)));
+				}
+				else
+					_shipShield()->SetLocalTransformation(head.Multiplied(spin));
+
 				_dbgTrsfOther++; _frameDirty++;
 			}
 
@@ -3108,11 +3530,20 @@ namespace Snake3DViewer
 			{
 				gp_Trsf spin;
 				spin.SetRotation(gp_Ax1(gp_Pnt(0, 0, 0), gp_Dir(0, 0, 1)), _spinAngle);
-				_shipBoost()->SetLocalTransformation(head.Multiplied(spin));
+
+				if (_viewMode == 1)
+				{
+					gp_Trsf shrink;
+					shrink.SetScale(gp_Pnt(0, 0, 0), 0.70);
+					_shipBoost()->SetLocalTransformation(head.Multiplied(spin.Multiplied(shrink)));
+				}
+				else
+					_shipBoost()->SetLocalTransformation(head.Multiplied(spin));
+
 				_dbgTrsfOther++; _frameDirty++;
 			}
 		}
-
+		
 		// Корабль бота: тот же кадр головы × подгонка части, но только СВОИ id
 		// (блок 60 + botId*10 .. +9). Без мерцания двигателя и щита — это
 		// эффекты игрока. Камера FollowHead ботов не видит: она читает slot 0,
@@ -3174,6 +3605,48 @@ namespace Snake3DViewer
 				it.Value()->SetLocalTransformation(head.Multiplied((*_fitTrsf)(id)));
 				_dbgTrsfOther++; _frameDirty++;
 			}
+
+			// Ореолы тянутся за кораблём: без этого ореол замирает в точке подбора
+			if (!(*_botShieldHalo)[botId].IsNull())
+			{
+				gp_Trsf tr; tr.SetTranslation(gp_Vec(x, y, z));
+				_aisContext()->SetLocation((*_botShieldHalo)[botId], tr);
+				_frameDirty++;
+			}
+			if (!(*_botBoostHalo)[botId].IsNull())
+			{
+				gp_Trsf tr; tr.SetTranslation(gp_Vec(x, y, z));
+				_aisContext()->SetLocation((*_botBoostHalo)[botId], tr);
+				_frameDirty++;
+			}
+		}
+
+		// Цвет бота: красим все части корабля (60+botId*10 .. +9) и все
+		// сегменты (10000+botId*512 .. +IdStride-1) одним цветом палитры.
+		void SetBotColor(int botId, double r, double g, double b)
+		{
+			if (botId < 0 || botId > 3) return;
+			Quantity_Color col(r, g, b, Quantity_TOC_RGB);
+
+			// Только корпус: первый id блока корабля
+			const int base = 60 + botId * 10;
+			if (_shipParts->IsBound(base))
+			{
+				Handle(AIS_InteractiveObject) obj = _shipParts->Find(base);
+				if (!obj.IsNull())
+					obj->SetColor(col);
+			}
+
+			// Сегменты — весь блок бота
+			const int segBase = 10000 + botId * 512;
+			const int segMax = segBase + 30;   // потолок длины: Bot.MaxLength
+			for (int i = segBase; i < segMax; ++i)
+			{
+				if (i >= static_cast<int>(_snakeSegments->size())) continue;
+				if ((*_snakeSegments)[i].IsNull()) continue;
+				(*_snakeSegments)[i]->SetColor(col);
+			}
+			_frameDirty++;
 		}
 
 		// Создать часть корабля из уже загруженной модели и поставить на сцену.
@@ -3185,6 +3658,17 @@ namespace Snake3DViewer
 
 			Handle(AIS_Shape) ais = new AIS_Shape(*m);
 			ais->SetDisplayMode(1);
+
+			// Корпус игрока (id < 60): выигрывает тест глубины у хвостов ботов,
+			// проходящих сквозь корабль — иначе куски корпуса «отрезаются»
+			// на пересечениях. Офсет микроскопический, визуального сдвига нет
+			if (id < 60)
+			{
+				ais->SetPolygonOffsets(1, 2.0f, 2.0f);   // 1 = Aspect_POLYGON_OFFSET_FILL
+				System::Diagnostics::Trace::WriteLine(System::String::Format(
+					"[AddShipPart] часть {0}: офсет применён", id));
+			}
+
 			_shipParts->Bind(id, ais);
 			if (id == 7) _enginePart() = ais;
 
@@ -3377,6 +3861,10 @@ namespace Snake3DViewer
 		// ═══════════════════════════════════════════════════════════════
 		// БЛОК 15.3 Разработка лабиринт - спавн оружия и здоровья, перезарядка
 		// ═══════════════════════════════════════════════════════════════
+		
+
+		// LEGACY: не вызывается. Спавн лабиринта идёт через BeginLabyrinth /
+		// AddLabRing / FinishLabyrinth. Оставлен для истории — старая дуговая схема.
 		// _labRings — vector<Handle(AIS_Shape)>, _labAxis — gp_Ax2 входа,
 		// _labOpen — открыт ли лабиринт, _labOpenTime — когда открылся.
 		void OpenLabyrinth(double x, double y, double z,
@@ -3385,23 +3873,53 @@ namespace Snake3DViewer
 			CloseLabyrinth();
 
 			gp_Dir fwd(dirX, dirY, dirZ);
-			*_labAxis = gp_Ax2(gp_Pnt(x, y, z), fwd);
+			//*_labAxis = gp_Ax2(gp_Pnt(x, y, z), fwd);
 			gp_Dir upRef(0, 0, 1);
-			if (std::abs(fwd.Z()) > 0.999) upRef = gp_Dir(0, 1, 0);
+			if (abs(fwd.Z()) > 0.999) upRef = gp_Dir(0, 1, 0);
 			gp_Dir right = fwd.Crossed(upRef);
+
+			// Изгиб: коридор — дуга радиуса LabBendR. Центр дуги отложен
+			// вбок от входа, каждое кольцо поворачивается вокруг него —
+			// так касательная в точке кольца всегда смотрит по курсу дуги
+			gp_Pnt center(x, y, z);
+			gp_Pnt arcC = center.Translated(gp_Vec(right) * (-LabBendR));
+			gp_Ax1 rotAxis(arcC, gp_Vec(upRef));
 
 			for (int i = 0; i < LabRingCount; i++)
 			{
-				gp_Pnt c = gp_Pnt(x, y, z).Translated(gp_Vec(fwd) * (i * LabSpacing));
-				gp_Ax2 ringAxis(c, fwd);
-				BRepPrimAPI_MakeTorus mk(ringAxis, LabOuterR, LabOuterR * 0.85);
+				double ang = (i * LabSpacing) / LabBendR;   // длина дуги / радиус
+				gp_Trsf rot;
+				rot.SetRotation(rotAxis, ang);
+
+				gp_Pnt ci = center.Transformed(rot);
+				gp_Dir di = fwd.Transformed(rot);            // касательная дуги
+
+				gp_Ax2 ringAxis(ci, di);
+				BRepPrimAPI_MakeTorus mk(ringAxis, LabOuterR, LabTubeR);
 
 				Handle(AIS_Shape) ring = new AIS_Shape(mk.Shape());
-				ring->SetColor(Quantity_Color(0.10, 0.80, 0.90, Quantity_TOC_RGB));
-				ring->SetTransparency(i == LabRingCount - 1 ? 0.2 : 0.55);
+				if (i == 0)
+				{
+					// Врата — фиолет, чуть прозрачнее: приглашение внутрь
+					ring->SetColor(Quantity_Color(0.55, 0.35, 0.95, Quantity_TOC_RGB));
+					ring->SetTransparency(0.35);
+				}
+				else if (i == LabRingCount - 1)
+				{
+					// Выход — золото, самое плотное: его надо узнать издали
+					ring->SetColor(Quantity_Color(1.00, 0.75, 0.20, Quantity_TOC_RGB));
+					ring->SetTransparency(0.15);
+				}
+				else
+				{
+					// Труба — циан, тусклые звенья между вратами и выходом
+					ring->SetColor(Quantity_Color(0.10, 0.80, 0.95, Quantity_TOC_RGB));
+					ring->SetTransparency(0.55);
+				}
 				ring->SetDisplayMode(1);
 				_aisContext()->Display(ring, Standard_False);
 				_labRings->push_back(ring);
+				_labPts->push_back(ci);
 			}
 			_labOpen = true;
 			_frameDirty++;
@@ -3413,6 +3931,7 @@ namespace Snake3DViewer
 				if (!r.IsNull() && !_aisContext().IsNull())
 					_aisContext()->Erase(r, Standard_False);
 			_labRings->clear();
+			_labPts->clear();
 			_labOpen = false;
 			_frameDirty++;
 		}
@@ -3428,26 +3947,96 @@ namespace Snake3DViewer
 		{
 			if (!_labOpen) return false;
 
-			gp_Vec axisDir(_labAxis->Direction());
-			gp_Vec v(_labAxis->Location(), gp_Pnt(px, py, pz));
-			double along = v.Dot(axisDir);
-			double off = (v - axisDir * along).Magnitude();
-			const double corridorR = LabOuterR + 1.0;
-			const double depth = LabRingCount * LabSpacing;
+			const int n = (int)_labPts->size();
+			if (n < 2) return false;
 
-			double& st = (*_labState)[objectId];
-			if (along > 0 && along < depth && off < corridorR)
+			// Ближайшая точка ломаной: даёт и глубину (bestS), и отклонение (bestD)
+			double bestD = 1e18, bestS = 0.0, s = 0.0;
+			for (int i = 0; i < n - 1; ++i)
 			{
-				st = max(st, along);			  // в трубе: копим глубину
+				const gp_Pnt& a = (*_labPts)[i];
+				const gp_Pnt& b = (*_labPts)[i + 1];
+				gp_Vec ab(a, b);
+				double len2 = ab.SquareMagnitude();
+				double seg = std::sqrt(len2);
+				gp_Vec ap(a, gp_Pnt(px, py, pz));
+				double t = (len2 > 1e-12) ? ap.Dot(ab) / len2 : 0.0;
+				t = max(0.0, min(1.0, t));
+				gp_Pnt proj = a.Translated(ab * t);
+				double d = proj.Distance(gp_Pnt(px, py, pz));
+				if (d < bestD) { bestD = d; bestS = s + t * seg; }
+				s += seg;
 			}
-			else if (st > 0 && along >= depth)
+			const double depth = s;                       // полная длина коридора
+			const double corridorR = LabOuterR + 1.0;     // «труба» детектора
+			const double endZone = LabSpacing * 1.5;   // «зона конца» коридора
+
+			int& st = (*_labState)[objectId];
+			if (bestD < corridorR)
 			{
-				st = 0.0;                         // дошёл до конца — refill
-				return true;
+				if (st == 0)
+				{
+					// Вошёл в трубу у одного из концов — запоминаем, с какого
+					if (bestS < endZone)                    st = 1;  // со входа
+					else if (depth - bestS < endZone)       st = 2;  // с выхода
+				}
+				else if (st == 1 && depth - bestS < endZone)
+				{
+					st = 0; return true;    // прошёл вход→выход
+				}
+				else if (st == 2 && bestS < endZone)
+				{
+					st = 0; return true;    // прошёл выход→вход — тоже валидно
+				}
 			}
-			else if (off > corridorR * 1.5)
-				st = 0.0;                         // отлетел в сторону — прогресс сгорает
+			else if (bestD > corridorR * 1.5)
+				st = 0;                                 // отлетел в сторону — прогресс сгорает
 			return false;
+		}
+
+		void BeginLabyrinth(int ringCount)
+		{
+			CloseLabyrinth();
+			_labRingTotal = ringCount;
+		}
+
+		void AddLabRing(int index, double x, double y, double z,
+			double dx, double dy, double dz)
+		{
+			gp_Pnt c(x, y, z);
+			gp_Ax2 ringAxis(c, gp_Dir(dx, dy, dz));
+			BRepPrimAPI_MakeTorus mk(ringAxis, LabOuterR, LabTubeR);
+
+			Handle(AIS_Shape) ring = new AIS_Shape(mk.Shape());
+			if (index == 0)
+			{
+				// Врата: тёмно-фиолет, глухая тьма входа
+				ring->SetColor(Quantity_Color(0.30, 0.12, 0.55, Quantity_TOC_RGB));
+				ring->SetTransparency(0.30);
+			}
+			else if (index == _labRingTotal - 1)
+			{
+				// Выход: бело-голубое свечение горизонта событий
+				ring->SetColor(Quantity_Color(0.80, 0.88, 1.00, Quantity_TOC_RGB));
+				ring->SetTransparency(0.10);
+			}
+			else
+			{
+				// Труба: почти чёрный индиго, читается только силуэтом
+				ring->SetColor(Quantity_Color(0.08, 0.06, 0.18, Quantity_TOC_RGB));
+				ring->SetTransparency(0.65);
+			}
+			ring->SetDisplayMode(1);
+			_aisContext()->Display(ring, Standard_False);
+			_labRings->push_back(ring);
+			_labPts->push_back(c);
+			_frameDirty++;
+		}
+
+		void FinishLabyrinth()
+		{
+			_labOpen = true;
+			_frameDirty++;
 		}
 
 		// ═══════════════════════════════════════════════════════════════
@@ -3558,6 +4147,14 @@ namespace Snake3DViewer
 			}
 		}
 
+		// Ореол всегда уходит в слой гало — независимо от места создания
+		void ShowHalo(const Handle(AIS_Shape)& h)
+		{
+			if (h.IsNull() || _aisContext().IsNull()) return;
+			if (_haloLayer >= 0) h->SetZLayer(_haloLayer);
+			_aisContext()->Display(h, Standard_False);
+		}
+
 		// Ревизия сцены: по каждому хранилищу считаем живые шейпы.
 		// Сумма должна совпадать с реальным числом отображённых объектов;
 		// расхождение — фантомы, и сразу видно, из какого блока они.
@@ -3604,6 +4201,343 @@ namespace Snake3DViewer
 				CountAlive(_weapons) +		CountAlive(_weaponShells),
 				walls, grid, hl));
 		}
+
+		// Слои ботов для изоляции дефекта. layer: 0 — сегменты, 1 — корабли, 2 — ореолы
+		void ShowBotLayer(int layer, bool on)
+		{
+			switch (layer)
+			{
+			case 0:   // сегменты ботов: блоки 10000+botId*512
+				for (int b = 0; b < 4; ++b)
+				{
+					int baseId = 10000 + b * 512;
+					int hidden = 0, beyond = 0;
+					for (int i = baseId; i < (int)_snakeSegments->size(); ++i)
+					{
+						if ((*_snakeSegments)[i].IsNull()) continue;
+						if (i < baseId + 512) ++hidden;
+						else                  ++beyond;
+					}
+					System::Diagnostics::Trace::WriteLine(System::String::Format(
+						"[ShowBotLayer] бот {0}: скрыто {1}, вне блока {2}", b, hidden, beyond));
+					for (int i = baseId; i < baseId + 512 && i < (int)_snakeSegments->size(); ++i)
+					{
+						if ((*_snakeSegments)[i].IsNull()) continue;
+						if (on) _aisContext()->Display((*_snakeSegments)[i], Standard_False);
+						else    _aisContext()->Erase((*_snakeSegments)[i], Standard_False);
+					}
+				}
+				break;
+
+			case 1:   // корабли ботов: части с id >= 60
+				for (NCollection_DataMap<int, Handle(AIS_Shape)>::Iterator it(*_shipParts);
+					it.More(); it.Next())
+				{
+					if (it.Key() < 60) continue;
+					if (on) _aisContext()->Display(it.Value(), Standard_False);
+					else    _aisContext()->Erase(it.Value(), Standard_False);
+				}
+				break;
+
+			case 2:   // ореолы ботов (щит/буст)
+				for (int b = 0; b < (int)_botShieldHalo->size(); ++b)
+				{
+					if (!(*_botShieldHalo)[b].IsNull())
+					{
+						if (on) _aisContext()->Display((*_botShieldHalo)[b], Standard_False);
+						else    _aisContext()->Erase((*_botShieldHalo)[b], Standard_False);
+					}
+					if (b < (int)_botBoostHalo->size() && !(*_botBoostHalo)[b].IsNull())
+					{
+						if (on) _aisContext()->Display((*_botBoostHalo)[b], Standard_False);
+						else    _aisContext()->Erase((*_botBoostHalo)[b], Standard_False);
+					}
+				}
+				break;
+			}
+			_aisContext()->UpdateCurrentViewer();
+		}
+
+		// ═══════════════════════════════════════════════════════════════
+		// ТЕСТ: скрытие только головных слотов ботов (клавиша 6)
+		// ═══════════════════════════════════════════════════════════════
+		void HideBotNecks()
+		{
+			if (_aisContext().IsNull()) return;
+
+			for (int b = 0; b < 4; ++b)
+			{
+				int headSlot = 10000 + b * 512;
+				if (headSlot >= (int)_snakeSegments->size()) continue;
+				if ((*_snakeSegments)[headSlot].IsNull()) continue;
+
+				_aisContext()->Erase((*_snakeSegments)[headSlot], Standard_False);
+				System::Diagnostics::Trace::WriteLine(System::String::Format(
+					"[Test] спрятана шея бота {0} (слот {1})", b, headSlot));
+			}
+			_aisContext()->UpdateCurrentViewer();
+		} 
+		// Тест: вернуть шеи ботов на сцену (после повторного нажатия 6)
+		void ShowBotNecks()
+		{
+			if (_aisContext().IsNull()) return;
+
+			for (int b = 0; b < 4; ++b)
+			{
+				int headSlot = 10000 + b * 512;
+				if (headSlot >= (int)_snakeSegments->size()) continue;
+				if ((*_snakeSegments)[headSlot].IsNull()) continue;
+
+				_aisContext()->Display((*_snakeSegments)[headSlot], Standard_False);
+				System::Diagnostics::Trace::WriteLine(System::String::Format(
+					"[Test] шея бота {0} (слот {1}) возвращена", b, headSlot));
+			}
+			_aisContext()->UpdateCurrentViewer();
+		}
+
+		// ═══════════════════════════════════════════════════════════════
+		// ТЕСТ: голый UpdateCurrentViewer (клавиша 5)
+		// ═══════════════════════════════════════════════════════════════
+		void UpdateViewerOnly()
+		{
+			if (_aisContext().IsNull()) return;
+			_aisContext()->UpdateCurrentViewer();
+			System::Diagnostics::Trace::WriteLine(
+				"[Test] UpdateCurrentViewer вызван вручную");
+		}
+
+		// ═══════════════════════════════════════════════════════════════
+		// ДИАГНОСТИКА: атрибуты всех живых сегментов ботов (клавиша 4)
+		// ═══════════════════════════════════════════════════════════════
+		void DumpSegmentAspects()
+		{
+			if (_aisContext().IsNull()) return;
+
+			int dumped = 0;
+			for (int id = 10000; id < 10000 + 4 * 512; ++id)
+			{
+				if (id >= (int)_snakeSegments->size()) break;
+				if ((*_snakeSegments)[id].IsNull()) continue;
+				if (!_aisContext()->IsDisplayed((*_snakeSegments)[id])) continue;
+
+				Handle(AIS_Shape) s = (*_snakeSegments)[id];
+				Standard_Integer offMode = 0;
+				Standard_ShortReal offFactor = 0.f, offUnits = 0.f;
+				s->Attributes()->ShadingAspect()->Aspect()->PolygonOffsets(
+					offMode, offFactor, offUnits);
+
+				System::Diagnostics::Trace::WriteLine(System::String::Format(
+					"[Aspects] сег {0}: слой={1} прозр={2:F2} offMode={3} offF={4:F1} offU={5:F1}",
+					id, (int)s->ZLayer(), s->Transparency(), offMode, offFactor, offUnits));
+				++dumped;
+			}
+			System::Diagnostics::Trace::WriteLine(System::String::Format(
+				"[Aspects] всего: {0}", dumped));
+		}
+
+		// ═══════════════════════════════════════════════════════════════
+		// ТЕСТ: снять polygon offset со всех живых сегментов (клавиша 3)
+		// ═══════════════════════════════════════════════════════════════
+		void ClearSegmentOffsets()
+		{
+			if (_aisContext().IsNull()) return;
+
+			int fixed = 0;
+			for (int id = 10000; id < 10000 + 4 * 512; ++id)
+			{
+				if (id >= (int)_snakeSegments->size()) break;
+				if ((*_snakeSegments)[id].IsNull()) continue;
+				if (!_aisContext()->IsDisplayed((*_snakeSegments)[id])) continue;
+
+				(*_snakeSegments)[id]->SetPolygonOffsets(0, 0.f, 0.f);
+				_aisContext()->Redisplay((*_snakeSegments)[id], Standard_False);
+				++fixed;
+			}
+			_aisContext()->UpdateCurrentViewer();
+			System::Diagnostics::Trace::WriteLine(System::String::Format(
+				"[Test] офсеты сняты у {0} сегментов", fixed));
+		}
+
+		void PickHole(int x, int y)
+		{
+			if (_aisContext().IsNull() || _view().IsNull()) return;
+
+			_aisContext()->MoveTo(x, y, _view(), Standard_False);
+			_aisContext()->InitDetected();
+
+			int found = 0;
+			while (_aisContext()->MoreDetected())
+			{
+				Handle(SelectMgr_EntityOwner) owner = _aisContext()->DetectedCurrentOwner();
+				_aisContext()->NextDetected();
+				if (owner.IsNull()) continue;
+
+				Handle(AIS_InteractiveObject) obj =
+					Handle(AIS_InteractiveObject)::DownCast(owner->Selectable());
+				if (obj.IsNull()) continue;
+
+				System::String^ kind = nullptr;
+
+				int nSeg = static_cast<int>(_snakeSegments->size());
+				for (int s = 0; s < nSeg; ++s)
+					if (!(*_snakeSegments)[s].IsNull() && (*_snakeSegments)[s] == obj)
+					{
+						kind = (s < 10000) ?
+							System::String::Format("сегмент игрока {0}", s) :
+							System::String::Format("сегмент бота {0}", s);
+						break;
+					}
+
+				if (kind == nullptr)
+				{
+					// Глаз камеры: точка отсчёта для «части улетела или на месте»
+					gp_Pnt eyeP = _view()->Camera()->Eye();
+					System::Diagnostics::Trace::WriteLine(System::String::Format(
+						"[Parts] глаз камеры=({0:F1},{1:F1},{2:F1})",
+						eyeP.X(), eyeP.Y(), eyeP.Z()));
+
+					// Корпус игрока вокруг глаза: кто из ближних сегментов на месте,
+					// кто стёрт, кто закреплён пином
+					int nSeg = static_cast<int>(_snakeSegments->size());
+					for (int s = 0; s < nSeg && s < 50; ++s)
+					{
+						if ((*_snakeSegments)[s].IsNull()) continue;
+
+						gp_Pnt sp((*_positions)[s].X(), (*_positions)[s].Y(), (*_positions)[s].Z());
+						double d = sp.Distance(eyeP);
+						if (d > 15.0) continue;
+
+						bool disp = _aisContext()->IsDisplayed((*_snakeSegments)[s]);
+						bool pin = IsPinned(s);
+						System::Diagnostics::Trace::WriteLine(System::String::Format(
+							"[Seg] сегмент {0}: {1}{2} | pos=({3:F1},{4:F1},{5:F1}) | до глаза={6:F1}",
+							s, disp ? "показан" : "СТЁРТ", pin ? " | ПИН" : "",
+							sp.X(), sp.Y(), sp.Z(), d));
+					}
+
+					NCollection_DataMap<int, Handle(AIS_Shape),
+						NCollection_DefaultHasher<int>>::Iterator pit(*_shipParts);
+					for (; pit.More(); pit.Next())
+					{
+						if (pit.Value().IsNull()) continue;
+						bool disp = _aisContext()->IsDisplayed(pit.Value());
+
+						const gp_Trsf& tr = pit.Value()->LocalTransformation();
+						gp_XYZ pos = tr.TranslationPart();
+
+						double dx = pos.X() - eyeP.X();
+						double dy = pos.Y() - eyeP.Y();
+						double dz = pos.Z() - eyeP.Z();
+						double dist = std::sqrt(dx * dx + dy * dy + dz * dz);
+
+						System::Diagnostics::Trace::WriteLine(System::String::Format(
+							"[Parts] часть {0}: {1} | сдвиг=({2:F1},{3:F1},{4:F1}) | до глаза={5:F1}",
+							pit.Key(), disp ? "показана" : "СТЁРТА",
+							pos.X(), pos.Y(), pos.Z(), dist));
+					}
+				}
+
+				if (kind == nullptr)
+				{
+					kind = DumpObjectIdentity(obj);
+				}
+
+				System::Diagnostics::Trace::WriteLine(System::String::Format(
+					"[Pick] точка ({0},{1}): {2}", x, y, kind));
+				++found;
+			}
+			if (found == 0)
+				System::Diagnostics::Trace::WriteLine(
+					"[Pick] пусто: луч ушёл в небо — в этот момент ближней стенки корпуса под курсором нет");
+
+			DumpOrphans();
+		}
+
+		// Класс и мировое положение объекта — звезда или сирота станут различимы
+		System::String^ DumpObjectIdentity(const Handle(AIS_InteractiveObject)& obj)
+		{
+			Handle(AIS_Shape) sh = Handle(AIS_Shape)::DownCast(obj);
+			if (sh.IsNull())
+				return System::String::Format("не-AIS_Shape: {0}",
+					gcnew System::String(obj->DynamicType()->Name()));
+
+			Bnd_Box box;
+			BRepBndLib::Add(sh->Shape(), box);
+			if (box.IsVoid())
+				return "AIS_Shape с пустым bbox";
+
+			Standard_Real xmin, ymin, zmin, xmax, ymax, zmax;
+			box.Get(xmin, ymin, zmin, xmax, ymax, zmax);
+
+			// AIS держит трансформацию отдельно от шейпа: Bnd_Box трансформировать
+			// не умеет — протаскиваем все 8 углов рамки через LocalTransformation.
+			// Тождественную трансформацию не проверяем (нет IsIdentity в сборке) —
+			// p.Transform() с единичной матрицей дешевле, чем спор с компилятором.
+			const gp_Trsf& trsf = sh->LocalTransformation();
+			double bxmin = 1e18, bymin = 1e18, bzmin = 1e18;
+			double bxmax = -1e18, bymax = -1e18, bzmax = -1e18;
+			for (int i = 0; i < 8; ++i)
+			{
+				gp_Pnt p(i & 1 ? xmax : xmin, i & 2 ? ymax : ymin, i & 4 ? zmax : zmin);
+				p.Transform(trsf);
+				if (p.X() < bxmin) bxmin = p.X();
+				if (p.X() > bxmax) bxmax = p.X();
+				if (p.Y() < bymin) bymin = p.Y();
+				if (p.Y() > bymax) bymax = p.Y();
+				if (p.Z() < bzmin) bzmin = p.Z();
+				if (p.Z() > bzmax) bzmax = p.Z();
+			}
+
+			double cx = 0.5 * (bxmin + bxmax);
+			double cy = 0.5 * (bymin + bymax);
+			double cz = 0.5 * (bzmin + bzmax);
+			double dist = std::sqrt(cx * cx + cy * cy + cz * cz);
+
+			return System::String::Format(
+				"AIS_Shape ptr=0x{0:X} центр=({1:F1},{2:F1},{3:F1}) габариты=({4:F2}x{5:F2}x{6:F2}) Rцентра={7:F1}",
+				System::IntPtr(sh.get()),
+				cx, cy, cz,
+				bxmax - bxmin, bymax - bymin, bzmax - bzmin, dist);
+		}
+
+		// Полный пересчёт: все показанные объекты контекста против наших реестров.
+		// Неопознанные — с положением и габаритами: сироты найдём мгновенно.
+		void DumpOrphans()
+		{
+			if (_aisContext().IsNull()) return;
+
+			AIS_ListOfInteractive lst;
+			_aisContext()->DisplayedObjects(lst);
+
+			int total = 0, orphan = 0;
+			for (AIS_ListIteratorOfListOfInteractive it(lst); it.More(); it.Next())
+			{
+				++total;
+				Handle(AIS_InteractiveObject) obj = it.Value();
+				bool known = false;
+
+				int nSeg = static_cast<int>(_snakeSegments->size());
+				for (int s = 0; s < nSeg && !known; ++s)
+					known = !(*_snakeSegments)[s].IsNull() && (*_snakeSegments)[s] == obj;
+
+				if (!known)
+				{
+					NCollection_DataMap<int, Handle(AIS_Shape),
+						NCollection_DefaultHasher<int>>::Iterator itp(*_shipParts);
+					for (; itp.More() && !known; itp.Next())
+						known = !itp.Value().IsNull() && itp.Value() == obj;
+				}
+
+				if (!known)
+				{
+					++orphan;
+					System::Diagnostics::Trace::WriteLine(System::String::Format(
+						"[Orphan] #{0}/{1}: {2}", orphan, total, DumpObjectIdentity(obj)));
+				}
+			}
+			System::Diagnostics::Trace::WriteLine(System::String::Format(
+				"[Orphan] всего показано: {0} | сирот: {1}", total, orphan));
+		}
 	};
 }
 
@@ -3617,5 +4551,5 @@ namespace
 		int n = 0;
 		for (auto& h : *v) if (!h.IsNull()) ++n;
 		return n;
-	}
+	}	
 }

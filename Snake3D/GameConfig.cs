@@ -25,7 +25,7 @@ namespace Snake3D
         public const double BaseStepsPerSecond = 15.0;
         public const int    MinesPerCristal = 3;
         public const double SuperCrystalRadius = 1.2;
-
+        public const double HullRadius = 1.0;
 
         public static class Ship
         {
@@ -180,8 +180,8 @@ namespace Snake3D
             public const double FireCooldown = 0.25;        // пауза между выстрелами, сек
             public const double ProjectileSpeed = 60.0;     
             public const double ProjectileLife = 3.0;       // секунд полёта
-            public const double ProjectileSize = 0.25;
-            public const double ProjectileRadius = 0.75;     // радиус коллизии снаряда
+            public const double ProjectileSize = 0.5;
+            public const double ProjectileRadius = 1.0;     // радиус коллизии снаряда
             public const double FallbackRadius = 1.0;       // радиус fallback-сферы и ореола пикапа
             public const double AimDistance = 30.0;         // дефолтная точка прицела впереди по курсу
             public const double ProjectileVisualScale = 0.5;
@@ -214,7 +214,7 @@ namespace Snake3D
             public const string Path = @"models\Shield.stp";
             public const double Size = 2.0;                     // габарит модели щита в единицах арены
             public const double FallbackRadius = 1.2;           // радиус для fallback-сферы и ореола
-            public const int    TriggerCount = 20;                 // съеденных кристаллов до появления щита
+            //public const int    TriggerCount = 20;                 // съеденных кристаллов до появления щита
             public const double LifeTime = 60.0;                // сколько щит ждёт на арене, сек
             public const double ProtectionTime = 30.0;          // защита от мин после подбора, сек
             public const double ShipHaloRadius = 2.5;           // радиус ореола вокруг корабля
@@ -222,11 +222,11 @@ namespace Snake3D
 
         public static class Boost
         {
-            public const int    ModelId = 10;                      // id модели щита в _models прокси
+            public const int    ModelId = 10;                      // id модели ускорения в _models прокси
             public const string Path = @"models\Boost.stp";
             public const double Size = 2.0;                     // габарит модели ускорения в единицах арены
             public const double FallbackRadius = 1.4;           // радиус для fallback-сферы и ореола
-            public const int    TriggerCount = 15;                 // съеденных кристаллов до появления ускорения
+            //public const int    TriggerCount = 15;                 // съеденных кристаллов до появления ускорения
             public const double LifeTime = 60.0;                // сколько ускорение ждёт на арене, сек
             public const double BoostTime = 30.0;               // ускорение после подбора, сек
             public const double SpeedMultiplier = 1.5;          // множитель скорости
@@ -236,14 +236,15 @@ namespace Snake3D
         public static class Labyrinth
         {
             public const bool UseLabyrinth = true;   // false → откат на сферу
-            public const int RingCount = 6;         // число колец в коридоре
+            public const int RingCount = 10;         // число колец в коридоре
             public const double RingOuterR = 4.0;     // внешний радиус тора
             public const double RingInnerR = 3.4;     // радиус прохода (труба тора)
-            public const double Spacing = 6.0;        // шаг между кольцами по оси
+            public const double Spacing = 9.0;        // шаг между кольцами по оси
             public const double PassCooldown = 45.0;  // сек до следующего refill
             public const double PlayerStartHealth = 5.0;
             public const double BotStartHealth = 3.0;
             public const int SpawnAmmo = 20;       // как при старте игры
+            public const double BendRad = 0.30;   // макс. изгиб на сегмент, ~17°
         }
 
         // Боты 
@@ -254,11 +255,17 @@ namespace Snake3D
             public const int Count = 3;
             public const int BaseLength = 5;
             public const int MaxLength = 30;
-            public const int LookaheadSteps = 10;
+            public const int LookaheadSteps = 7;
             public const double TurnDegPerSecond = 135.0;
             public const double RespawnDelay = 3.0;
             public const double MinSpawnDistance = 40.0;
             public const int KillScore = 100;
+            public const double MaxHealth = 3.0;
+
+            // Радиус зоны отчуждения вокруг корабля игрока. Лог показал подлёты
+            // на 3-4 юнита — хвосты ботов перекрывали кабину. Стартово 12,
+            // подстрой: подлёты вернулись — увеличь, боты «трусливы» — уменьши
+            public const double AvoidRadius = 6.0;
 
             // Хитбокс для снарядов: уязвимы только первые N сегментов
             // (голова + 4). Хвост — «броня». Правило
@@ -272,6 +279,11 @@ namespace Snake3D
             public const double AimConeDot = 0.90;    // конус ~25°: стреляет только примерно по курсу
             public const double AimError = 2.0;       // разброс прицеливания, единиц арены
             public const double MuzzleAhead = 1.2;    // точка вылета снаряда впереди головы
+
+            public const int ProtectedSegments = 10;     // у головы: касание = смерть касающемуся
+            public const int BiteZoneLength = 10;        // у хвоста: зона укуса
+            public const int MinKeepSegments = 5;       // жертва не укорачивается ниже этого
+            public const int BiteScorePerSegment = 10;   // очков за сегмент, как за кристалл
 
             // Корабль ботов: всегда Shuttle_0 (Variants[0]), под своими id.
             // 60..63 — бот 0, 70..73 — бот 1 и т.д. (3 части + 1 пушка)
@@ -301,5 +313,14 @@ namespace Snake3D
             public const int MaxHits = 5;
             public const double InvulnTime = 0.5;
         }
+        public static class SuperItems
+        {
+            public const int MaxShields = 6;
+            public const int MaxBoosts = 6;
+            public const int MaxLabyrinths = 6;
+            public const double GuaranteeSeconds = 30.0;
+        }
+
+
     }
 }

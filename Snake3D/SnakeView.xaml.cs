@@ -5,6 +5,7 @@ using Snake3D;
 using System;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Forms;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
@@ -14,9 +15,9 @@ using MouseButtonEventArgs = System.Windows.Input.MouseButtonEventArgs;
 using MouseEventArgs = System.Windows.Input.MouseEventArgs;
 using MouseWheelEventArgs = System.Windows.Input.MouseWheelEventArgs;
 using Point = System.Windows.Point;
+using UserControl = System.Windows.Controls.UserControl;
 // Явные алиасы против конфликта WinForms ↔ WPF
 using WF = System.Windows.Forms;
-using UserControl = System.Windows.Controls.UserControl;
 
 namespace Snake3D
 {
@@ -42,7 +43,7 @@ namespace Snake3D
         private bool _finished;
         private bool _runSaved;
         private bool _markersOn = false;
-        private bool _fullscreen;
+        private bool _fullscreen;       
 
         // Кольцо прицела: создаётся один раз, дальше — только Display/Erase
         // на смене состояния и MoveCrosshair каждый кадр (дешёвая матрица)
@@ -64,6 +65,11 @@ namespace Snake3D
 
         private static int _instances;
 
+        // Изоляция слоёв ботов для поиска пропадающих кусков корабля
+        private bool _botsSegmentsOn = true;   // слой 0: сегменты ботов
+        private bool _botsShipsOn = true;   // слой 1: корабли ботов
+        private bool _botsHalosOn = true;   // слой 2: ореолы ботов
+
         public SnakeView()
         {
             _instances++;
@@ -75,7 +81,7 @@ namespace Snake3D
             InitializeComponent();
             Loaded += SnakeView_Loaded;
             Unloaded += SnakeView_Unloaded;
-            Deactivated += SnakeView_Deactivated;
+            Deactivated += SnakeView_Deactivated;           
         }
 
         //Порядок инициализации важен и всегда одинаков:
@@ -250,6 +256,8 @@ namespace Snake3D
 
                     _viewport.Proxy!.SetBackgroundColor(5, 5, 10);
                 });
+
+                _game.FiredAtPlayer += OnFiredAtPlayer;
 
                 // 4. Опции ДО Reset: сцена строится сразу с учётом выбора.
                 // Источник опций — opt из меню, отдельного _game.Options нет.
@@ -463,6 +471,49 @@ namespace Snake3D
                                       // гасятся кулдауном внутри Fire()
                     break;
 
+
+                //////// Диагностика ботов
+                case Key.Q:                
+                    _viewport?.PickHole();
+                    e.Handled = true;
+                    break;
+                case Key.D2:
+                case Key.NumPad2:
+                    _game.ToggleBotTailHide();
+                    e.Handled = true;
+                    break;
+                case Key.D3:
+                case Key.NumPad3:
+                    _game.ClearSegmentOffsets();
+                    e.Handled = true;
+                    break;
+                case Key.D4:
+                case Key.NumPad4:
+                    _game.DumpSegmentAspects();
+                    e.Handled = true;
+                    break;
+                case Key.D5:
+                    _game.UpdateViewerOnly();   // внутри: _aisContext()->UpdateCurrentViewer();
+                    e.Handled = true;
+                    break;
+                case Key.D6:
+                case Key.NumPad6:
+                    _game.ToggleBotNecks();
+                    e.Handled = true;
+                    break;
+                case Key.D7:
+                    _game.ToggleBotLayer(0);
+                    e.Handled = true;
+                    break;
+                case Key.D8:
+                    _game.ToggleBotLayer(1);
+                    e.Handled = true;
+                    break;
+                case Key.D9:
+                    _game.ToggleBotLayer(2);
+                    e.Handled = true;
+                    break;                    
+
             }
         }
 
@@ -604,6 +655,37 @@ namespace Snake3D
             }
 
             _hud.UpdateCrystalMarkers(xs, ys);
+        }
+
+        private void OnFiredAtPlayer(Point3D from)
+        {
+            if (_hud == null || _viewport?.Proxy == null) return;
+
+            int sx = 0, sy = 0;
+            bool inFront = false;
+            double w = ViewportHost.ActualWidth;
+            double h = ViewportHost.ActualHeight;
+
+            bool ok = _viewport.Proxy.ProjectToScreen(from.X, from.Y, from.Z, ref sx, ref sy, ref inFront);
+            double cx = w / 2, cy = h / 2;
+
+            if (ok && inFront)
+            {
+                // y в верхнюю систему — как в UpdateHudVisuals
+                double syTop = h - sy;
+
+                // Стрелок в переднем полупространстве — дуга в его сторону.
+                // 0 — угроза сверху экрана, растёт по часовой.
+                // За краем экрана тоже показываем: полувышедший стрелок —
+                // полезная информация, в отличие от маркеров кристаллов
+                double angle = Math.Atan2(sx - cx, cy - syTop) * 180.0 / Math.PI;
+                _hud.ShowAttackFlash(angle, cx, cy);
+            }
+            else
+            {
+                // Стрелок за камерой — дуга снизу: «угроза сзади»
+                _hud.ShowAttackFlash(180.0, cx, cy);
+            }
         }
 
         //Полноэкранный режим

@@ -18,6 +18,7 @@ namespace Snake3D
     {
         public SnakeSceneProxy? Proxy { get; private set; }
         private bool _isInitialized = false; // Флаг, чтобы не инициализировать дважды
+        private int _lastMouseX, _lastMouseY;
 
         public SnakeViewport()
         {
@@ -27,6 +28,14 @@ namespace Snake3D
             //контрол на всю ячейку хоста.
             SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint, true);
             this.Dock = System.Windows.Forms.DockStyle.Fill; // Это правильно, оставляем
+
+            // Координаты курсора для пикинга: мышь уходит в HWND контрола
+            // (airspace), WPF-события не доходят — ловим здесь, в WinForms-мире.
+            this.MouseMove += (s, e) =>
+            {
+                _lastMouseX = e.X;
+                _lastMouseY = e.Y;
+            };
         }
 
         //OnHandleCreated — ключевой момент жизненного цикла.
@@ -84,6 +93,12 @@ namespace Snake3D
             // Сетка/стены/подсветка строятся в SnakeGame.Reset —
             // здесь только небо: оно не зависит от опций и не стирается рестартом.
             Proxy.CreateStarSky(800, 240.0);
+        }
+
+        // Пикинг точки под курсором (клавиша 9): что стоит в этой точке сцены
+        public void PickHole()
+        {
+            Proxy?.PickHole(_lastMouseX, _lastMouseY);
         }
 
         //Dispose(bool) — при разрушении контрола вызывает Proxy?.ClearScene().
