@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using static Snake3D.GameConfig;
 
 namespace Snake3D
 {
@@ -26,6 +27,12 @@ namespace Snake3D
         public int Mines { get; set; } = 100;
         public double Arena { get; set; } = 120;
         public double Grid { get; set; } = 2.5;
+
+        // Сложность: enum сериализуется числом (0..3), читается тем же числом.
+        // Старый settings.json без этого поля — десериализатор возьмёт дефолт Normal
+        public GameDifficulty Difficulty { get; set; } = GameDifficulty.Normal;
+        public int Bots { get; set; } = 3;
+        public double TurnStep { get; set; } = 0.0;
     }
 
     //Корень файла settings.json - перезаписывается при сохранении

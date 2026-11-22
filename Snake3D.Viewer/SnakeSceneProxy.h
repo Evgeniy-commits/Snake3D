@@ -246,6 +246,14 @@ namespace Snake3DViewer
 		bool _labOpen = false;
 		int _labRingTotal = 0;
 
+		// ── Портал перехода: параллельный набор, оружие не трогает ──
+		std::vector<Handle(AIS_Shape)>* _portalRings = new std::vector<Handle(AIS_Shape)>();
+		std::vector<gp_Pnt>* _portalPts = new std::vector<gp_Pnt>();
+		bool _portalOpen = false;
+		int _portalRingTotal = 0;
+		std::map<int, int>* _portalState = new std::map<int, int>();
+
+
 		array<bool>^ _cockpitHidden;
 		array<double>^ _cockpitTrLast;
 		// Слоты, скрытые намеренно (HideSegment): CockpitHide их не показывает
@@ -4037,6 +4045,109 @@ namespace Snake3DViewer
 		{
 			_labOpen = true;
 			_frameDirty++;
+		}
+
+		void BeginPortal(int ringCount)
+		{
+			ClosePortal();
+			_portalRingTotal = ringCount;
+		}
+
+		void AddPortalRing(int index, double x, double y, double z,
+			double dx, double dy, double dz)
+		{
+			gp_Pnt c(x, y, z);
+			gp_Ax2 ringAxis(c, gp_Dir(dx, dy, dz));
+			BRepPrimAPI_MakeTorus mk(ringAxis, LabOuterR, LabTubeR);
+
+			Handle(AIS_Shape) ring = new AIS_Shape(mk.Shape());
+			if (index == 0)
+			{
+				// Врата: золото — приглашение, оружейный фиолет не перепутаешь
+				ring->SetColor(Quantity_Color(1.00, 0.78, 0.20, Quantity_TOC_RGB));
+				ring->SetTransparency(0.20);
+			}
+			else if (index == _portalRingTotal - 1)
+			{
+				// Выход: раскалённо-белый, самый плотный — свет изнутри
+				ring->SetColor(Quantity_Color(1.00, 0.95, 0.75, Quantity_TOC_RGB));
+				ring->SetTransparency(0.05);
+			}
+			else
+			{
+				// Труба: тёплый янтарь, приглушённый
+				ring->SetColor(Quantity_Color(0.55, 0.35, 0.05, Quantity_TOC_RGB));
+				ring->SetTransparency(0.60);
+			}
+			ring->SetDisplayMode(1);
+			_aisContext()->Display(ring, Standard_False);
+			_portalRings->push_back(ring);
+			_portalPts->push_back(c);
+			_frameDirty++;
+		}
+
+		void FinishPortal()
+		{
+			_portalOpen = true;
+			_frameDirty++;
+		}
+
+		void ClosePortal()
+		{
+			for (auto& r : *_portalRings)
+				if (!r.IsNull() && !_aisContext().IsNull())
+					_aisContext()->Erase(r, Standard_False);
+			_portalRings->clear();
+			_portalPts->clear();
+			_portalState->clear();      // прогресс пролёта сгорает вместе с порталом
+			_portalOpen = false;
+			_frameDirty++;
+		}
+
+		// Возвращает true, когда объект пролетел портал насквозь.
+		// Стейт-машина та же, что у оружия, но стейт у портала свой
+		bool CheckPortalPass(int objectId, double px, double py, double pz)
+		{
+			if (!_portalOpen) return false;
+
+			const int n = (int)_portalPts->size();
+			if (n < 2) return false;
+
+			double bestD = 1e18, bestS = 0.0, s = 0.0;
+			for (int i = 0; i < n - 1; ++i)
+			{
+				const gp_Pnt& a = (*_portalPts)[i];
+				const gp_Pnt& b = (*_portalPts)[i + 1];
+				gp_Vec ab(a, b);
+				double len2 = ab.SquareMagnitude();
+				double seg = std::sqrt(len2);
+				gp_Vec ap(a, gp_Pnt(px, py, pz));
+				double t = (len2 > 1e-12) ? ap.Dot(ab) / len2 : 0.0;
+				t = max(0.0, min(1.0, t));
+				gp_Pnt proj = a.Translated(ab * t);
+				double d = proj.Distance(gp_Pnt(px, py, pz));
+				if (d < bestD) { bestD = d; bestS = s + t * seg; }
+				s += seg;
+			}
+
+			const double corridorR = LabOuterR + 1.0;
+			const double endZone = LabSpacing * 1.5;
+			const double depth = s;
+
+			int& st = (*_portalState)[objectId];
+			if (bestD < corridorR)
+			{
+				if (st == 0)
+				{
+					if (bestS < endZone)              st = 1;
+					else if (depth - bestS < endZone) st = 2;
+				}
+				else if (st == 1 && depth - bestS < endZone) { st = 0; return true; }
+				else if (st == 2 && bestS < endZone) { st = 0; return true; }
+			}
+			else if (bestD > corridorR * 1.5)
+				st = 0;
+			return false;
 		}
 
 		// ═══════════════════════════════════════════════════════════════

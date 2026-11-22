@@ -41,6 +41,8 @@ namespace Snake3D
         private DateTime _lastHudUpdate = DateTime.MinValue;
         private bool _menuHandled = false;
         private bool _finished;
+        private bool _won;        // последняя партия в миссии: победа или смерть
+        private bool _campaignDone;
         private bool _runSaved;
         private bool _markersOn = false;
         private bool _fullscreen;       
@@ -203,6 +205,9 @@ namespace Snake3D
                 _game.ShotFired += () => Audio.Service.PlaySfx("shot");
                 _game.MineDestroyed += () => Audio.Service.PlaySfx("explosion");
 
+                _game.PortalSpawned += () => Audio.Service.PlaySfx("superCrystal");
+                _game.PortalEntered += () => Audio.Service.PlaySfx("victory");
+
                 // Здоровье: полоска в HUD + вспышки + звуки.
                 // Frame() гоняется в CompositionTarget.Rendering, то есть в UI-потоке,
                 // поэтому Dispatcher.Invoke здесь формально лишний — но стоит по образцу
@@ -237,6 +242,7 @@ namespace Snake3D
                     Dispatcher.Invoke(() =>
                     {
                         _finished = true;                 // чтобы Space сделал рестарт, а не Start()
+                        _won = false;                     // смерть не победа
                         SaveRun();                        // рекорд пишется при любом исходе
                         Audio.Service.StopFlight();
                         Audio.Service.StopMusic();          // Stop, не Pause — чтобы следующий старт дал новую музыку
@@ -247,6 +253,7 @@ namespace Snake3D
                 _game.Victory += (s, ev) => Dispatcher.Invoke(() =>
                 {
                     _finished = true;
+                    _won = true;
                     SaveRun();
                     Audio.Service.StopFlight();
                     Audio.Service.StopMusic();
@@ -262,7 +269,19 @@ namespace Snake3D
                 // 4. Опции ДО Reset: сцена строится сразу с учётом выбора.
                 // Источник опций — opt из меню, отдельного _game.Options нет.
                 _game.ApplyOptions(opt);
-                _game.Reset();
+                GameConfig.Difficulty.Current = opt.Difficulty;
+
+                if (opt.Mode == GameMode.Mission)
+                {
+                    // Миссия: StartMission перезапишет арену, еду и мины из конфига
+                    // уровня, сам вызовет Reset. autoStart: false — ждём Space, как в охоте
+                    _game.StartMission(opt.MissionResumeLevel, opt.MissionResumeScore,
+                                       autoStart: false, playerName: opt.MissionName);
+                }
+                else
+                {
+                    _game.Reset();
+                }
 
                 _hud?.UpdateHealth(GameConfig.Health.MaxHits, GameConfig.Health.MaxHits);
 
@@ -340,9 +359,38 @@ namespace Snake3D
                     {
                         _finished = false;
                         _runSaved = false;
-                        _game.Reset();                        
+
+                        if (_game.Mode == GameMode.Mission && !_campaignDone)
+                        {
+                            // Победа в миссии: Space = следующая миссия.
+                            // NextMission сам решит — уровень+1 или финал
+                            _won = false;
+                            _game.NextMission();
+                            _viewport?.Proxy?.SetBackgroundColor(2, 2, 5);
+                            SnapCameraAfterReset();
+                            if (_game.IsRunning)
+                            {
+                                Audio.Service.StartMusic();
+                                Audio.Service.StartFlight();
+                                StatusText.Text = "Идёт игра!";
+                            }
+                            break;
+                        }
+
+                        if (_campaignDone)
+                        {
+                            // Кампания пройдена: Space — новая кампания с миссии 1
+                            _campaignDone = false;
+                            _won = false;
+                            _game.StartMission(1, 0, autoStart: false);
+                            StatusText.Text = "Space — старт";
+                            break;
+                        }
+
+                        _won = false;
+                        _game.Reset();                          // FreeHunt: как раньше
                         _viewport?.Proxy?.SetBackgroundColor(2, 2, 5);
-                        SnapCameraAfterReset();                        
+                        SnapCameraAfterReset();
                         StatusText.Text = "Space - старт";
                     }
                     else if (_game.IsRunning)
@@ -352,6 +400,9 @@ namespace Snake3D
                     }
                     else if (!_game.IsRunning)
                     {
+                        _won = false;              // флаги прошлого исхода — в ноль
+                        _finished = false;
+                        _runSaved = false;
                         _game.Start();
                         Audio.Service.StartMusic();
                         Audio.Service.StartFlight();
@@ -433,7 +484,15 @@ namespace Snake3D
                                 // применяем опции, готовим партию, но НЕ запускаем — старт по Space
                                 _finished = false;
                                 _game.ApplyOptions(menu.Options);
-                                _game.Reset();
+                                GameConfig.Difficulty.Current = menu.Options.Difficulty;
+
+                                if (menu.Options.Mode == GameMode.Mission)
+                                    _game.StartMission(menu.Options.MissionResumeLevel,
+                                        menu.Options.MissionResumeScore,
+                                        autoStart: false,
+                                        playerName: menu.Options.MissionName);
+                                else
+                                    _game.Reset();
                                 SnapCameraAfterReset();          // ← и здесь тоже: вместо прямого FollowHead
                                 _viewport?.Proxy!.SetViewMode(menu.Options.CockpitView ? 1 : 0);
                                 SetFullscreen(menu.Options.Fullscreen);

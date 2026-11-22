@@ -20,7 +20,7 @@ namespace Snake3D
         public const int    MaxCrystalCount = 1000;
         public const int    DefaultMineCount = 10;
         public const int    MaxMineCount = 1000;
-        public const double BaseCellsPerSecond = 12.5;
+        //public const double BaseCellsPerSecond = 12.5;
         public const double StepLength = 1.0;
         public const double BaseStepsPerSecond = 15.0;
         public const int    MinesPerCristal = 3;
@@ -254,7 +254,7 @@ namespace Snake3D
         {
             public const int Count = 3;
             public const int BaseLength = 5;
-            public const int MaxLength = 30;
+            public const int MaxLength = 300;
             public const int LookaheadSteps = 7;
             public const double TurnDegPerSecond = 135.0;
             public const double RespawnDelay = 3.0;
@@ -321,6 +321,76 @@ namespace Snake3D
             public const double GuaranteeSeconds = 30.0;
         }
 
+        // Миссии: линейная прогрессия. Level пишется SnakeGame при старте
+        // миссии, боты и спавнеры читают отсюда. Static — намеренно:
+        // единый источник, как и весь GameConfig
+        public static class Mission
+        {
+            public static int Level = 1;                //куррент миссия, 1 - base
+            public const int MaxLevel = 9;               //предел
+            public const double MaxArenaSize = 400;     //потолок арены
+
+            public static int CrystalsFor(int level)
+            {
+                if (level <= 1) return 100;
+                if (level <= 2) return 200;
+                if (level <= 3) return 300;
+                return Math.Min(300 + (level - 3) * 50, MaxCrystalCount);                 
+            }
+
+            public static int MinesFor(int level)
+            {
+                if (level == 1) return 0;
+                if (level == 2) return 50;
+                return Math.Min(50 + (level - 2) * 50, MaxMineCount);
+            }
+
+            public static double ArenaFor(int level)
+            {
+                double s = DefaultArenaSize + 50 * (level - 1);
+                return Math.Min(s, MaxArenaSize);
+            }
+
+            // Уровень угрозы ботов: 0 — безоружны и неагрессивны,
+            // 1 — охотятся и кусают, но без оружия,
+            // 2 — полный арсенал, как у игрока
+            public static int BotThreat => Level <= 2 ? 0 : (Level == 3 ? 1 : 2);
+
+            // Агрессия в миссиях 4+: множитель тяги охоты, дальности огня
+            // и точности прицеливания. 4-я — 1.0, дальше +0.25 за миссию
+            public static double BotAggression => Level <= 4
+                ? 1.0 : Math.Min(1.0 + 0.25 * (Level - 4), 3.0);
+
+            // С 5-й миссии боты охотятся именно за игроком — приоритет цели
+            public static bool HuntPlayer => Level >= 5;
+        }
+
+        // Сложность. Живёт в GameOptions (выбор меню), применяется через
+        // статический класс — единый источник для игры и ботов
+        public enum GameDifficulty { Easy, Normal, Hard, Survival }
+
+        public static class Difficulty
+        {
+            public static GameDifficulty Current = GameDifficulty.Normal;
+
+            // Мины: множитель к MinesPerCristal и к потолку мин
+            public static double MinesMul => Current switch
+            {
+                GameDifficulty.Easy => 0.5,
+                GameDifficulty.Hard => 1.5,
+                GameDifficulty.Survival => 2.0,
+                _ => 1.0
+            };
+
+            // Агрессия ботов: поверх агрессии миссии
+            public static double BotAggroMul => Current switch
+            {
+                GameDifficulty.Easy => 0.6,
+                GameDifficulty.Hard => 1.4,
+                GameDifficulty.Survival => 1.7,
+                _ => 1.0
+            };
+        }
 
     }
 }

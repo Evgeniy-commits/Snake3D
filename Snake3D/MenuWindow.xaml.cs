@@ -1,5 +1,6 @@
-﻿using System.Windows;
-using System.ComponentModel;
+﻿using System.ComponentModel;
+using System.Windows;
+using static Snake3D.GameConfig;
 
 namespace Snake3D
 {
@@ -16,6 +17,13 @@ namespace Snake3D
             Options.GridStep = OptGrid.Value;
             Options.CrystalCount = (int)OptCrystals.Value;
             Options.MinesCount = (int)OptMines.Value;
+
+            Options.Difficulty = DiffEasy.IsChecked == true ? GameDifficulty.Easy :
+                         DiffHard.IsChecked == true ? GameDifficulty.Hard :
+                         DiffSurvival.IsChecked == true ? GameDifficulty.Survival :
+                         GameDifficulty.Normal;
+            Options.BotCount = (int)OptBots.Value;
+            Options.TurnStep = OptTurn.Value;
         }
 
         // Опции читаются из контролов только в момент «Начать» —
@@ -93,6 +101,14 @@ namespace Snake3D
                     : $"{OptMines.Value:0} мин на поле";               
             };
 
+            OptBots.ValueChanged += (s, e) =>
+                BotsLabel.Text = OptBots.Value < 1 ? "без ботов" : $"{OptBots.Value:0} ботов";
+
+            OptTurn.ValueChanged += (s, e) =>
+                TurnLabel.Text = OptTurn.Value < 0.001
+                    ? "поворот: по умолчанию"
+                    : $"{OptTurn.Value:F3} рад/тик";
+
             BtnContinue.Visibility = pauseMode ? Visibility.Visible : Visibility.Collapsed;
 
             Closed += (s, e) =>
@@ -101,6 +117,11 @@ namespace Snake3D
                 PushOptionsToStore();
                 SettingsStore.Save();
             };
+
+            DiffEasy.Checked += (s, e) => UpdateDifficultyLabel();
+            DiffNormal.Checked += (s, e) => UpdateDifficultyLabel();
+            DiffHard.Checked += (s, e) => UpdateDifficultyLabel();
+            DiffSurvival.Checked += (s, e) => UpdateDifficultyLabel();
         }
         private void LoadOptionsToUi()
         {
@@ -118,6 +139,16 @@ namespace Snake3D
             OptMines.Value = o.Mines;
             OptArena.Value = o.Arena;
             OptGrid.Value = o.Grid;
+
+            OptBots.Value = o.Bots;
+            OptTurn.Value = o.TurnStep;
+
+            // Сложность: одна из четырёх радиокнопок
+            if (o.Difficulty == GameDifficulty.Easy) DiffEasy.IsChecked = true;
+            else if (o.Difficulty == GameDifficulty.Hard) DiffHard.IsChecked = true;
+            else if (o.Difficulty == GameDifficulty.Survival) DiffSurvival.IsChecked = true;
+            else DiffNormal.IsChecked = true;
+            UpdateDifficultyLabel();
         }
         private void PushOptionsToStore()
         {
@@ -139,6 +170,10 @@ namespace Snake3D
             o.Mines = (int)OptMines.Value;
             o.Arena = OptArena.Value;
             o.Grid = OptGrid.Value;
+
+            o.Bots = (int)OptBots.Value;
+            o.TurnStep = OptTurn.Value;
+            o.Difficulty = Options.Difficulty;
         }
 
         private void BtnOptions_Click(object sender, RoutedEventArgs e)
@@ -176,8 +211,59 @@ namespace Snake3D
 
         private void BtnMission_Click(object sender, RoutedEventArgs e)
         {
-            CollectOptions();
+            // Панель разворачивается на месте; повторный клик — свернуть
+            PanelMission.Visibility = PanelMission.Visibility == Visibility.Visible
+                    ? Visibility.Collapsed : Visibility.Visible;
+            PanelMissionName.Visibility = Visibility.Collapsed;   // имя спрятано до запроса
             Options.Mode = GameMode.Mission;
+
+            //CollectOptions();
+            //Options.Mode = GameMode.Mission;
+            //Audio.Service.StartMusic();
+            //Audio.Service.PlaySfx("start");
+            //_allowClose = true;
+            //DialogResult = true;
+        }
+
+        private void BtnMissionNew_Click(object sender, RoutedEventArgs e)
+        {
+            PanelMissionName.Visibility = Visibility.Visible;
+            MissionNameBox.Focus();
+        }
+
+        private void MissionNameBox_KeyDown(object sender, System.Windows.Input.KeyEventArgs e)
+        {
+            if (e.Key == System.Windows.Input.Key.Enter) BtnMissionStart_Click(sender, e);
+        }
+
+        private void BtnMissionStart_Click(object sender, RoutedEventArgs e)
+        {
+            string name = MissionNameBox.Text.Trim();
+            if (name.Length == 0) return;   // без имени не стартуем
+
+            Options.MissionIsResume = false;
+            Options.MissionName = name;
+            Options.MissionResumeLevel = 1;
+            Options.MissionResumeScore = 0;
+            CloseMissionToGame();
+        }
+
+        private void BtnMissionResume_Click(object sender, RoutedEventArgs e)
+        {
+            // Единственное новое окно во всей цепочке — список сохранений
+
+            var win = new MissionResumeWindow { Owner = this };
+            if (win.ShowDialog() == true && win.Chosen != null)
+            {
+                Options.MissionIsResume = true;
+                Options.MissionName = win.Chosen.Name;
+                Options.MissionResumeLevel = win.Chosen.Level;
+                Options.MissionResumeScore = win.Chosen.Score;
+                CloseMissionToGame();
+            }
+        }
+        private void CloseMissionToGame()
+        {
             Audio.Service.StartMusic();
             Audio.Service.PlaySfx("start");
             _allowClose = true;
@@ -237,6 +323,21 @@ namespace Snake3D
                 return;
             }
             base.OnClosing(e);
+        }
+
+        private void BtnDifficulty_Click(object sender, RoutedEventArgs e)
+        {
+            DifficultyPopup.IsOpen = true;
+            UpdateDifficultyLabel();
+        }
+
+        // Подпись на кнопке отражает выбор — видно и без открытия попапа
+        private void UpdateDifficultyLabel()
+        {
+            BtnDifficulty.Content = DiffEasy.IsChecked == true ? "Сложность: легко" :
+                                    DiffHard.IsChecked == true ? "Сложность: сложно" :
+                                    DiffSurvival.IsChecked == true ? "Сложность: выживание" :
+                                    "Сложность: норма";
         }
     }
 }

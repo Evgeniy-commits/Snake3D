@@ -85,7 +85,7 @@ namespace Snake3D
         private readonly double _segmentRadius;
         private readonly double _step = GameConfig.StepLength;
         private readonly double _foodRadius;
-        private readonly double _arenaSize;
+        private double _arenaSize;
         private readonly Random _rand = new Random();
 
         // ── 3.2 Состояние партии ──
@@ -332,6 +332,9 @@ namespace Snake3D
         public event Action? MineDestroyed;    // мину сбили
         public Action<Point3D>? FiredAtPlayer;   // бот выстрелил в игрока : позиция дула
 
+        public event Action PortalSpawned;
+        public event Action PortalEntered;
+
         // ── 3.10 Замеры производительности ──
         //Для замера производительности
         private readonly System.Diagnostics.Stopwatch _renderWatch = new();
@@ -374,6 +377,17 @@ namespace Snake3D
         private List<Point3D> _labPtsC = new List<Point3D>();
         public IReadOnlyList<Point3D> LabPath => _labPtsC;
 
+        // Портал перехода: появляется после сбора всех кристаллов миссии.
+        // Пока активен — победа не стреляет, ждём входа игрока
+        // Портал перехода: свой лабиринт со своей геометрией. Поля _lab* не
+        // трогаем — их использует оружейный лабиринт и маршруты ботов в депо        
+        private bool _portalActive;
+        private Point3D _portalEntry;
+        private Vector3D _portalAxis;
+        private readonly List<Point3D> _portalPts = new();
+
+        public bool PortalActive => _portalActive;
+
         // ── Здоровье игрока ──
         private int _health;
         private double _hitInvuln;                 // окно неуязвимости после попадания
@@ -387,6 +401,7 @@ namespace Snake3D
 
         public double ArenaSize => _arenaSize;
         public IReadOnlyList<Point3D> PlayerSegments => _segments;
+        private string _playerName = "Игрок";
 
         // ═══════════════════════════════════════════════════════════════════
         // БЛОК 4. ЖИЗНЕННЫЙ ЦИКЛ: конструктор, старт, пауза, опции, Reset
@@ -706,6 +721,9 @@ namespace Snake3D
             _hitInvuln = 0.0;
             HealthChanged?.Invoke(_health);
 
+            // Портал предыдущей партии не переживает пересборку мира
+            _portalActive = false;
+
             _boosts.Clear();
             _boostOnField = false;
             _crystalsSinceBoost = 0;
@@ -732,6 +750,63 @@ namespace Snake3D
             Score = 0;
             ScoreChanged?.Invoke(this, Score);
             _proxy.Redraw();
+        }
+
+        // ═══════════════════════════════════════════════════════════════
+        // МИССИИ: старт уровня и переход после победы
+        // ═══════════════════════════════════════════════════════════════
+
+        // autoStart: false — из меню (партия ждёт Space), true — из NextMission,
+        // где продолжение начинается сразу. playerName — из окна миссий
+        public void StartMission(int level, int startScore = 0,
+                                 bool autoStart = true, string playerName = "")
+        {
+            GameConfig.Mission.Level = Math.Min(level, GameConfig.Mission.MaxLevel);
+            _mode = GameMode.Mission;
+            if (!string.IsNullOrWhiteSpace(playerName))
+                _playerName = playerName;
+
+            // Конфиг миссии: арена, стартовые кристаллы и мины.
+            // Reset() пересоберёт стены, сетку, кристаллы и ботов под эти числа
+            _arenaSize = GameConfig.Mission.ArenaFor(GameConfig.Mission.Level);
+            _crystalCount = GameConfig.Mission.CrystalsFor(GameConfig.Mission.Level);
+            _mineCount = GameConfig.Mission.MinesFor(GameConfig.Mission.Level);
+
+            // Счёт кампании переживает переход: Reset обнуляет — возвращаем
+            int savedScore = Score;
+            Reset();
+            Score = startScore;
+            ScoreChanged?.Invoke(this, Score);
+            SaveProgress();
+
+            IsRunning = autoStart;
+        }
+
+        // Прогресс: записать положение игрока. Зовётся на старте миссии,
+        // на победе и на поражении
+        public void SaveProgress()
+        {
+            if (_mode != GameMode.Mission) return;
+            MissionSaveStore.Save(_playerName, GameConfig.Mission.Level, Score);
+        }
+
+        // После победы: следующая миссия или финал кампании.
+        // Вызывается из обработчика закрытия баннера победы
+        public void NextMission()
+        {
+            if (GameConfig.Mission.Level >= GameConfig.Mission.MaxLevel)
+            {
+                // Финальный экран или меню
+                ShowFinalScreen();
+                return;
+            }
+            StartMission(GameConfig.Mission.Level + 1);
+        }
+
+        private void ShowFinalScreen()
+        {
+            // Показать финальный экран или меню
+            // Здесь можно добавить логику показа финального экрана
         }
 
         // ═══════════════════════════════════════════════════════════════════
@@ -913,7 +988,8 @@ namespace Snake3D
 
                     if (_mode == GameMode.Mission && _crystals.Count == 0 && _superCrystals.Count == 0)
                     {
-                        TriggerVictory();
+                        //TriggerVictory();
+                        OpenPortal();
                         return true;
                     }
 
@@ -1051,6 +1127,14 @@ namespace Snake3D
                     EnsureMines(); //восстанавливаем мины
                     break;
                 }
+            }
+
+            // Портал: победа засчитывается только за полный пролёт туннеля.
+            // objectId — тот же, что в оружейном CheckLabyrinthPass для игрока
+            if (_portalActive && _proxy.CheckPortalPass(0, newHead.X, newHead.Y, newHead.Z))
+            {
+                TriggerMissionTransition();
+                return true;
             }
 
             //рост
@@ -1743,9 +1827,25 @@ namespace Snake3D
             var sw = System.Diagnostics.Stopwatch.StartNew();
             int spawned = 0;   // ← сколько реально заспавнили за этот кадр
 
+            // Потолок мин един для обоих режимов: и стартовый набор миссии,
+            // и «+3 за кристалл» упираются в глобальный MaxMineCount.
+            // Рост поля при этом не ограничен — только глобальный потолок
+            int mineCap = GameConfig.MaxMineCount;
+
             _ph.Restart();
             do
             {
+                // Достижим ли потолок с учётом уже поставленных в очередь:
+                // SpawnOneMine кладёт в _mines по одной, очередь хвостом догоняет.
+                // Guard на очереди нужен, иначе за один кадр перепрыгнем потолок
+                if (_mines.Count + _pendingMineSpawns >= mineCap)
+                {
+                    // Потолок достигнут — очередь сбрасываем: дальше всё равно
+                    // некуда ставить. Новые кристаллы снова добавят спавны
+                    _pendingMineSpawns = 0;
+                    break;
+                }
+
                 SpawnOneMine();
                 _pendingMineSpawns--;
                 spawned++;
@@ -1869,6 +1969,7 @@ namespace Snake3D
 
         private void SpawnLabyrinth()
         {
+            if (_portalActive) return;
             if (_labOpen || _labCount >= SuperItems.MaxLabyrinths) return;
 
             Point3D p = FindCenterSpot();
@@ -1892,6 +1993,73 @@ namespace Snake3D
 
             _weaponLifeTimer = GameConfig.Weapon.LifeTime;
             WeaponSpawned?.Invoke();
+        }
+
+        // Портал перехода на следующий уровень. Геометрия — та же функция,
+        // что у оружейного лабиринта, но другая палитра: оружейный — зелёный,
+        // переходный — золотой (видно издалека, путать нельзя)
+        // Портал перехода на следующий уровень: тот же BuildLabPath, но
+        // палитра золотая — оружейный зелёный, спутать невозможно
+        private void SpawnVictoryPortal()
+        {
+            if (_portalActive) return;
+
+            // Портал занимает место оружейного лабиринта: гасим коридор оружия
+            // и с маршрутов ботов — depо больше не существует
+            if (_labOpen)
+            {
+                _labOpen = false;
+                _weaponLifeTimer = 0;
+                _labPtsC?.Clear();          // маршруты ботов в депо — тоже мертвы
+                _proxy.CloseLabyrinth();    // кольца с экрана, стейт детектора в ноль
+            }
+
+            Point3D p = FindCenterSpot();
+            var pts = new List<Point3D>();
+            var dirs = new List<Vector3D>();
+            BuildLabPath(p, pts, dirs);
+
+            // Маршруты ботов (depо) НЕ заполняем: в портал идут только игроки
+            _portalPts.Clear();
+            _portalPts.AddRange(pts);
+            _portalEntry = p;
+            _portalAxis = dirs[0].Normalized();
+            _portalActive = true;
+
+            _proxy.BeginPortal(pts.Count);
+            for (int i = 0; i < pts.Count; i++)
+                _proxy.AddPortalRing(i, pts[i].X, pts[i].Y, pts[i].Z,
+                    dirs[i].X, dirs[i].Y, dirs[i].Z);
+            _proxy.FinishPortal();
+
+            System.Diagnostics.Trace.WriteLine("[Mission] портал перехода открыт");
+            PortalSpawned?.Invoke();
+        }
+
+        // Все кристаллы собраны: не конец, а открытие выхода.
+        // Партия продолжается — мины и боты никуда не деваются
+        private void OpenPortal()
+        {
+            if (_portalActive) return;
+            SpawnVictoryPortal();
+        }
+
+        // Голова внутри объёма портала. Координаты и радиус подставим
+        // из оружейного лабиринта — там они уже вычисляются
+        private bool PortalContains(Point3D head)
+        {
+            // ЗАГЛУШКА до прихода геометрии: центр портала и радиус
+            const double radius = 5.0;
+            // return Distance(head, _portalCenter) <= radius;
+            return false;
+        }
+
+        // Игрок вошёл в портал: оформление победы — прежнее TriggerVictory,
+        // но с пометкой «переход», чтобы баннер показал правильный текст
+        private void TriggerMissionTransition()
+        {
+            _portalActive = false;
+            TriggerVictory();   // Victory-событие и баннер — как раньше
         }
 
         // Таймер окна: выжившие супер-кристаллы возвращаются в пул обычных.
@@ -2230,6 +2398,24 @@ namespace Snake3D
             TrySpawnSuper();
         }
 
+        // Миссия: бот съел кристалл — на поле появляется РОВНО ОДИН новый.
+        // Внимание: EnsureCrystals() доливает поле до _crystalCount — в миссии
+        // каждый съеденный ботом кристалл откатывал бы прогресс игрока обратно
+        // к стартовой сотне, и миссию было бы не пройти. Поэтому цель занижается
+        // на один вызов: поле сохраняет текущий размер, обмен строго 1:1
+        public void OnBotAteCrystalInMission(int index)
+        {
+            if (index < 0 || index >= _crystals.Count) return;
+            _proxy.RemoveCrystalAt(index);
+            _crystals.RemoveAt(index);
+
+            // Временная цель: текущее поле + один кристалл. _crystalCount в
+            // миссии дальше нигде не читается (StartMission перезапишет его
+            // перед следующим уровнем), так что занижение безопасно
+            _crystalCount = _crystals.Count + 1;
+            EnsureCrystals();
+        }
+
         public void OnBotAteSuperCrystal(int index, BotSnake bot)
         {
             if (index < 0 || index >= _superCrystals.Count) return;
@@ -2550,6 +2736,12 @@ namespace Snake3D
         {
             IsRunning = false;
             Victory?.Invoke(this, EventArgs.Empty);
+            ShowVictoryBanner();
+        }
+        private void ShowVictoryBanner()
+        {
+            // Показать баннер победы
+            // Здесь можно добавить логику показа баннера
         }
 
         private void TriggerGameOver(string reason = "?")
@@ -2558,10 +2750,13 @@ namespace Snake3D
             $"[GameOver] причина: {reason} hp={_health} score={Score}");
             IsGameOver = true;
             IsRunning = false;
+            _portalActive = false;
+            _portalPts.Clear();
+            _proxy.ClosePortal();    // кольца с экрана — прогресс уровня не переживает
             _pendingMineSpawns = 0;
             GameOver?.Invoke(this, EventArgs.Empty);
             System.Diagnostics.Trace.WriteLine(new System.Diagnostics.StackTrace(true).ToString());
-        }
+        }        
 
         public double Distance(Point3D a, Point3D b)
         {

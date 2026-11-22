@@ -1,0 +1,23 @@
+﻿<Window x:Class="Snake3D.MissionResumeWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Продолжить" Height="360" Width="400"
+        WindowStartupLocation="CenterOwner">
+	<Window.Background>
+		<ImageBrush ImageSource="/image/Shatl.jpg" Stretch="UniformToFill"/>
+	</Window.Background>
+	<StackPanel Margin="26">
+		<TextBlock Text="Сохранённые игроки" FontSize="24" FontWeight="Bold"
+                   Foreground="#E6E9F5" HorizontalAlignment="Center" Margin="0,0,0,12"/>
+		<ListBox x:Name="SavedList" Height="170" FontSize="15"
+                 Background="#2A2F4A" Foreground="#E6E9F5" BorderBrush="#5A6B9E"
+                 MouseDoubleClick="SavedList_DoubleClick"/>
+		<Button x:Name="BtnLoad" Content="Продолжить" Height="38" FontSize="18"
+                FontWeight="SemiBold" Foreground="#E6E9F5" Background="#A01A1E38"
+                BorderBrush="#5A6B9E" Cursor="Hand" Margin="0,12,0,0"
+                Click="BtnLoad_Click"/>
+		<Button x:Name="BtnBack" Content="Назад" Height="34" Margin="0,8,0,0"
+                Foreground="#9AA6C8" Background="#A01A1E38" BorderBrush="#5A6B9E"
+                Cursor="Hand" Click="BtnBack_Click"/>
+	</StackPanel>
+</Window>

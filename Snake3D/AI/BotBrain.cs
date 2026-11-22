@@ -185,6 +185,12 @@ namespace Snake3D
             double minePenalty = 0.0;               // штраф за мины на пути
             double crashR2 = crashR * crashR, mineR2 = mineR * mineR;
 
+            // Миссия: пассивные боты (угроза 0) не охотятся и не «подставляются».
+            // Объявлена в начале метода, чтобы оба блока ниже — охота и агрессия —
+            // видели флаг независимо друг от друга
+            bool missionPassive = game.Mode == GameMode.Mission &&
+                                  GameConfig.Mission.BotThreat == 0;
+
             // ── Прогноз полёта: до первой блокировки ──
             for (int k = 1; k <= lookahead; k++)
             {
@@ -259,12 +265,19 @@ namespace Snake3D
             // летящий за патронами, не должен отвлекаться на охоту ──
             if (!depotTarget.HasValue)
             {
-                double hp = HuntPull(pos, game.PlayerSegments, bot, game);
-                score += hp * 1500.0;          // тяга, а не штраф: чем ближе кончик — тем лучше
-                foreach (var other in game.Bots)
+                if (!depotTarget.HasValue && !missionPassive)
                 {
-                    if (other == null || !other.IsAlive || other == bot) continue;
-                    score += HuntPull(pos, other.Segments, bot, game) * 1500.0;
+                    // Агрессия миссии: множитель 1.0..3.0, растёт с уровнем (4+)
+                    double aggro = GameConfig.Mission.BotAggression;
+                    double hp = HuntPull(pos, game.PlayerSegments, bot, game);
+                    // С 6-й миссии игрок — приоритетная добыча: тяга вдвое сильнее
+                    double playerBias = GameConfig.Mission.HuntPlayer ? 2.0 : 1.0;
+                    score += hp * 4000.0 * aggro * playerBias;
+                    foreach (var other in game.Bots)
+                    {
+                        if (other == null || !other.IsAlive || other == bot) continue;
+                        score += HuntPull(pos, other.Segments, bot, game) * 4000.0 * aggro;
+                    }
                 }
             }
 
@@ -295,15 +308,17 @@ namespace Snake3D
             if (isStraight) score += 15.0;      // прямой курс предпочтительнее — меньше дёрганья
             score += _rand.NextDouble() * 8.0;  // капля хаоса: боты не ходят строем
 
-            // ── Агрессия: подставиться под прогноз курса врага. Вне депо ──
-            if (!depotTarget.HasValue)
+            // ── Агрессия: подставиться под прогноз курса врага. Вне депо,
+            // вне пассивной миссии ──
+            if (!depotTarget.HasValue && !missionPassive)
             {
-                double aggression = PathThreat(pos, game.Head, game.Forward, stepLen, lookahead);
+                double aggro = GameConfig.Mission.BotAggression;
+                double aggression = PathThreat(pos, game.Head, game.Forward, stepLen, lookahead) * aggro;
                 foreach (var other in game.Bots)
                 {
                     if (other == null || !other.IsAlive || other == bot) continue;
                     aggression = Math.Max(aggression,
-                        PathThreat(pos, other.Segments[0], other.Forward, stepLen, lookahead));
+                        PathThreat(pos, other.Segments[0], other.Forward, stepLen, lookahead) * aggro);
                 }
                 score += aggression;
             }
@@ -403,6 +418,11 @@ namespace Snake3D
             aimDir = bot.Forward;
             if (bot.Ammo <= 0 || game.IsGameOver || !game.IsRunning) return false;
 
+            // Миссия: стрелять разрешено только вооружённым ботам (4+).
+            // В миссиях 1–3 стволы у ботов не активны вовсе
+            if (game.Mode == GameMode.Mission && GameConfig.Mission.BotThreat < 2)
+                return false;
+
             Point3D head = bot.Segments[0];
             Point3D target = default;
             double dist = 0;
@@ -411,9 +431,14 @@ namespace Snake3D
             // Приоритет 1а: игрок — с упреждением. Щит игрока: снаряд не берёт,
             // стрелять по нему нет смысла
             Point3D pH = game.Head;
+
+            // Дальность огня растёт с агрессией миссии (миссия 4 — база,
+            // дальше +25% за уровень до потолка агрессии 3.0)
+            double fireRange = GameConfig.Bot.FireRange * GameConfig.Mission.BotAggression;
+
             double dx = pH.X - head.X, dy = pH.Y - head.Y, dz = pH.Z - head.Z;
             dist = Math.Sqrt(dx * dx + dy * dy + dz * dz);
-            if (dist <= GameConfig.Bot.FireRange && !game.ProtectionActive)   // ← имя сверь
+            if (dist <= fireRange && !game.ProtectionActive)   // ← имя сверь
             {
                 double flight = dist / GameConfig.Weapon.ProjectileSpeed;
                 double playerSpeed = GameConfig.StepLength / game.LogicInterval;
@@ -438,7 +463,7 @@ namespace Snake3D
                     Point3D oh = other.Segments[0];
                     double ox = oh.X - head.X, oy = oh.Y - head.Y, oz = oh.Z - head.Z;
                     double d = Math.Sqrt(ox * ox + oy * oy + oz * oz);
-                    if (d > GameConfig.Bot.FireRange || d >= bestD) continue;
+                    if (d > fireRange || d >= bestD) continue;
 
                     Vector3D to = new Vector3D(ox, oy, oz).Normalized();
                     if (Vector3D.DotProduct(bot.Forward, to) < GameConfig.Bot.AimConeDot) continue;
@@ -459,7 +484,7 @@ namespace Snake3D
             // на штраф в 50 очков
             if (!haveTarget && bot.Ammo > GameConfig.Labyrinth.SpawnAmmo / 2)
             {
-                double lookLen = GameConfig.Bot.FireRange;
+                double lookLen = fireRange;
                 double tube = bot.SegmentRadius + 2.0;          // узкий коридор курса
                 double tube2 = tube * tube;
 
@@ -488,29 +513,34 @@ namespace Snake3D
         }
 
         // Охотничья тяга: укус вблизи + погоня издали. Радиус погони —
-        // пол-арены: хвост должен быть виден охотнику отовсюду, иначе
-        // бот узнаёт о добыче, лишь случайно подплыв
+        // вся арена: хвост должен быть виден охотнику отовсюду.
         private double HuntPull(Point3D pos, IReadOnlyList<Point3D> victimSegs, BotSnake bot, SnakeGame game)
         {
-            if (victimSegs.Count < GameConfig.Bot.MinKeepSegments) return 0;
+            // Минимальная добыча — 6 сегментов: у жертвы короче нечего
+            // отнять (MinKeepSegments = 5). Было MinKeepSegments — при 5
+            // охота стояла мёртво
+            if (victimSegs.Count < 6) return 0;
 
             Point3D tip = victimSegs[victimSegs.Count - 1];
-            double d = Math.Sqrt(DistanceSq(pos, tip));
+            double d = Math.Sqrt(DistanceSq(pos, tip));      // ← d объявлена ДО первого использования
 
             double advantage = 1.0 + (bot.Segments.Count - victimSegs.Count) / 20.0;
             if (advantage < 0.4) advantage = 0.4;
             if (victimSegs.Count > 40) advantage += 0.3;   // длинный хвост — приманка
 
+            // Близко: тяга к укусу
             double biteRange = bot.Step * (GameConfig.Bot.LookaheadSteps + 10);
             if (d < biteRange)
                 return (1.0 - d / biteRange) * advantage;
 
-            double chaseRange = game.ArenaSize * 0.5;
+            // Погоня: радиус — вся арена. Было 0.5 × арена —
+            // хвост за серединой поля бот «не видел»
+            double chaseRange = game.ArenaSize;
             if (d >= chaseRange) return 0;
 
             //if (_huntLog++ % 40 == 0)
-                //System.Diagnostics.Trace.WriteLine(
-                //    $"[Hunt] бот {bot.Id} дистанция до хвоста={d:F0} тяга={0.30 * advantage * (1.0 - d / chaseRange):F2}");
+            //    System.Diagnostics.Trace.WriteLine(
+            //        $"[Hunt] бот {bot.Id} дистанция до хвоста={d:F0} тяга={0.30 * advantage * (1.0 - d / chaseRange):F2}");
             return 0.30 * advantage * (1.0 - d / chaseRange);
         }
 
@@ -520,7 +550,10 @@ namespace Snake3D
         {
             Vector3D helper = Math.Abs(dir.Y) < 0.9 ? new Vector3D(0, 1, 0) : new Vector3D(1, 0, 0);
             Vector3D perp = Vector3D.CrossProduct(dir, helper).Normalized();
-            double shift = (_rand.NextDouble() * 2 - 1) * GameConfig.Bot.AimError;
+            // Разброс прицеливания падает с агрессией: чем выше миссия,
+            // тем точнее стрельба. Базовый AimError = 2.0
+            double err = GameConfig.Bot.AimError / GameConfig.Mission.BotAggression;
+            double shift = (_rand.NextDouble() * 2 - 1) * err;
             return (dir + perp * (shift / Math.Max(dist, 1e-3))).Normalized();
         }
 

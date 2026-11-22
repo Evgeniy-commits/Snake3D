@@ -235,11 +235,14 @@ namespace Snake3D
                 int hit = game.FindContactIndex(game.PlayerSegments, newHead, crashR);
                 if (hit >= 0)
                 {
-                    if (SnakeGame.IsBiteIndex(game.PlayerSegments.Count, hit))
+                    // Гейт агрессии: неагрессивный бот никогда не кусает —
+                    // касание остаётся обычной аварией (умирает по правилам ниже)
+                    if (SnakeGame.IsBiteIndex(game.PlayerSegments.Count, hit) &&
+                        (game.Mode == GameMode.FreeHunt || GameConfig.Mission.BotThreat >= 1))
                         game.QueueBiteOnPlayer(this, hit);
                     else if (hit < GameConfig.Bot.ProtectedSegments ||
-                             game.PlayerSegments.Count > GameConfig.Bot.MinKeepSegments)                        
-                             died = true;
+                             game.PlayerSegments.Count > GameConfig.Bot.MinKeepSegments)
+                        died = true;
                 }
                 // Корпус игрока крупнее сегментной сферы: корабль — это
                 // слот 0 плюс габарит геометрии. Бот, вошедший в корпус,
@@ -257,9 +260,11 @@ namespace Snake3D
                 {
                     if (other == this || !other.IsAlive) continue;
                     int hit = game.FindContactIndex(other.Segments, newHead, crashR);
+                    bool aggressiveNow = game.Mode == GameMode.FreeHunt ||
+                                          GameConfig.Mission.BotThreat >= 1;
                     if (hit < 0) continue;
 
-                    if (SnakeGame.IsBiteIndex(other.Segments.Count, hit))
+                    if (SnakeGame.IsBiteIndex(other.Segments.Count, hit) && aggressiveNow)
                         game.QueueBite(this, other, hit);
                     else if (hit < GameConfig.Bot.ProtectedSegments ||
                              other.Segments.Count > GameConfig.Bot.MinKeepSegments)
@@ -327,6 +332,32 @@ namespace Snake3D
                     {
                         game.OnBotAteCrystal(i);
                         if (Segments.Count < GameConfig.Bot.MaxLength)   // потолок длины
+                        {
+                            Segments.Add(oldTail);
+                            _proxy.AddSegment(oldTail.X, oldTail.Y, oldTail.Z,
+                                              _segmentRadius, GlobalId(Segments.Count - 1));
+                            _proxy.SetBotColor(Id, TailColor[0], TailColor[1], TailColor[2]);
+                        }
+                        break;
+                    }
+                }
+            }
+            // Еда: в обеих режимах бот ест и растёт. Рост нужен в миссии
+            // тоже — охота за хвостом бота становится осмысленной: чем
+            // длиннее туша, тем больше сегментов можно откусить за очки
+            {
+                var crystals = game.Crystals;
+                for (int i = 0; i < crystals.Count; i++)
+                {
+                    if (game.Distance(newHead, crystals[i]) <= _segmentRadius + _foodRadius + 0.8)
+                    {
+                        if (game.Mode == GameMode.Mission)
+                            game.OnBotAteCrystalInMission(i);
+                        else
+                            game.OnBotAteCrystal(i);
+
+                        // Рост — в обоих режимах, потолок длины один
+                        if (Segments.Count < GameConfig.Bot.MaxLength)
                         {
                             Segments.Add(oldTail);
                             _proxy.AddSegment(oldTail.X, oldTail.Y, oldTail.Z,

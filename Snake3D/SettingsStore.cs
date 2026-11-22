@@ -23,7 +23,7 @@ namespace Snake3D
             PropertyNameCaseInsensitive = true,   // Speed == speed == SPEED
             WriteIndented = true
         };
-
+        
         public static void Load()
         {
             Trace.WriteLine($"[Settings] Load: {FilePath}, файл есть: {File.Exists(FilePath)}");
